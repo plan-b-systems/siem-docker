@@ -1,0 +1,5 @@
+requests==2.32.3
+docker==7.1.0
+APScheduler==3.10.4
+python-dateutil==2.9.0
+tzlocal==5.2

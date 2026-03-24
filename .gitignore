@@ -1,0 +1,25 @@
+# ── Active config (contains generated secrets) ──────────────
+config.env
+
+# ── Generated Graylog config (contains secrets) ─────────────
+graylog/graylog.conf
+
+# ── TLS private keys & generated artifacts ──────────────────
+certs/ca.key
+certs/graylog.key
+certs/graylog.crt
+certs/graylog.csr
+certs/ca.srl
+
+# ── JVM truststore (binary, regenerated on install) ─────────
+graylog/cacerts
+
+# ── Docker build cache ───────────────────────────────────────
+license-checker/__pycache__/
+*.pyc
+
+# ── OS / editor noise ────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.bak

@@ -207,18 +207,24 @@ scheduler: BackgroundScheduler = BackgroundScheduler(timezone=TZ_NAME)
 
 def _reschedule_expired_mode() -> None:
     log.info("Switching to EXPIRED mode: checking every 10 minutes")
-    scheduler.reschedule_job(
-        "main_check",
-        trigger=IntervalTrigger(minutes=10),
-    )
+    try:
+        scheduler.reschedule_job(
+            "main_check",
+            trigger=IntervalTrigger(minutes=10),
+        )
+    except Exception:
+        pass  # Job not yet added (startup check) — scheduler will pick correct trigger after
 
 
 def _reschedule_normal_mode() -> None:
     log.info("Switching to NORMAL mode: checking daily at 12:00 (%s)", TZ_NAME)
-    scheduler.reschedule_job(
-        "main_check",
-        trigger=CronTrigger(hour=12, minute=0, timezone=TZ_NAME),
-    )
+    try:
+        scheduler.reschedule_job(
+            "main_check",
+            trigger=CronTrigger(hour=12, minute=0, timezone=TZ_NAME),
+        )
+    except Exception:
+        pass  # Job not yet added (startup check) — scheduler will pick correct trigger after
 
 # ── Core check logic ─────────────────────────────────────────────────────
 

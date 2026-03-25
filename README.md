@@ -35,10 +35,21 @@ Production-ready, on-premises SIEM appliance based on **Graylog 7.2**, **OpenSea
 |-----------|---------|-------------|
 | CPU | 4 cores | 8 cores |
 | RAM | 8 GB | 16 GB |
-| Disk | 100 GB | 1 TB (NVMe) |
+| Disk | 200 GB | 1–4 TB (external USB/NVMe) |
 | OS | Ubuntu 22.04 LTS | Ubuntu 24.04 LTS |
 | Docker | 24.0+ | latest |
 | Docker Compose | v2.20+ | latest |
+
+> **Disk sizing for 730-day retention:** A small office (~10 devices) needs ~200 GB, a medium site (~50 devices) needs ~500 GB–1 TB, and large deployments (200+ devices) may need 2–4 TB. An external USB 3.0 HDD is the cheapest solution — see [External Storage](#external-storage-data_path) below.
+
+---
+
+## Deployment Guides
+
+| Platform | Guide |
+|----------|-------|
+| **Ubuntu Linux** (recommended) | [DEPLOY.md](DEPLOY.md) |
+| **Windows 10/11** (via WSL2 + Docker Desktop) | [WINDOWS-DEPLOY.md](WINDOWS-DEPLOY.md) |
 
 ---
 
@@ -48,14 +59,13 @@ Production-ready, on-premises SIEM appliance based on **Graylog 7.2**, **OpenSea
 
 ```bash
 curl -fsSL https://get.docker.com | sh
-apt-get install -y docker-compose-plugin gettext-base openssl
+apt-get install -y docker-compose-plugin gettext-base openssl git
 ```
 
-### 2. Clone / copy the stack to the target machine
+### 2. Clone the stack to the target machine
 
 ```bash
-scp -r graylog-siem/ technician@192.168.1.100:/opt/plansb-siem
-ssh technician@192.168.1.100
+git clone https://github.com/plan-b-systems/siem-docker.git /opt/plansb-siem
 cd /opt/plansb-siem
 ```
 
@@ -75,7 +85,8 @@ Key variables to set:
 | `GRAYLOG_HOSTNAME` | FQDN or IP of this appliance | `siem.acme.local` |
 | `GRAYLOG_ADMIN_PASSWORD` | Admin UI password | *(strong password)* |
 | `TIMEZONE` | Local timezone | `Asia/Jerusalem` |
-| `RETENTION_DAYS` | Days of logs to keep | `365` |
+| `RETENTION_DAYS` | Days of logs to keep | `730` |
+| `DATA_PATH` | External disk mount (optional) | `/mnt/siem-data` |
 | `OPENSEARCH_HEAP_SIZE` | Half of host RAM | `4g` |
 
 ### 4. Install
@@ -88,6 +99,7 @@ The installer will:
 - Validate prerequisites and config
 - Auto-generate all secrets (appended to `config.env`)
 - Generate a self-signed TLS certificate with a local CA
+- Set up external storage directories if `DATA_PATH` is configured
 - Tune the OS (`vm.max_map_count`, ulimits)
 - Pull and start all containers
 - Configure Graylog inputs via REST API
@@ -102,6 +114,41 @@ Password: <value of GRAYLOG_ADMIN_PASSWORD in config.env>
 ```
 
 Import `certs/ca.crt` into your browser / OS certificate store to trust the TLS certificate.
+
+---
+
+## External Storage (DATA_PATH)
+
+For 730-day log retention, you'll likely need more disk than the OS drive provides. The cheapest solution is an external USB 3.0 HDD.
+
+### Setting up an external drive
+
+```bash
+# 1. Identify the drive
+lsblk
+
+# 2. Format (one-time — THIS ERASES THE DRIVE)
+sudo mkfs.ext4 /dev/sdb1
+
+# 3. Create mount point and mount
+sudo mkdir -p /mnt/siem-data
+sudo mount /dev/sdb1 /mnt/siem-data
+
+# 4. Make permanent (survives reboot)
+echo '/dev/sdb1 /mnt/siem-data ext4 defaults,nofail 0 2' | sudo tee -a /etc/fstab
+```
+
+Then set in `config.env`:
+```
+DATA_PATH=/mnt/siem-data
+```
+
+The installer will automatically:
+- Create subdirectories (`opensearch/`, `mongodb/`, `graylog/`, `graylog-journal/`)
+- Set correct file ownership for each service
+- Generate a `docker-compose.override.yml` with bind mounts
+
+If `DATA_PATH` is left empty, Docker named volumes on the internal disk are used.
 
 ---
 
@@ -192,6 +239,12 @@ docker compose --env-file config.env up -d
 # Rotate TLS certificate
 rm certs/graylog.{crt,key,csr}
 sudo ./reconfigure.sh
+
+# Check disk usage on external storage
+df -h /mnt/siem-data
+
+# Check OpenSearch index sizes
+docker exec plansb-opensearch curl -s localhost:9200/_cat/indices?v
 ```
 
 ---
@@ -205,7 +258,7 @@ sudo ./reconfigure.sh
 | Access control & authentication | Graylog RBAC; admin password SHA-256 hashed |
 | Audit trail | Graylog built-in audit log (`audit_log_enabled = true`) |
 | Log integrity | Daily index rotation + read-only enforcement after rotation; OpenSearch immutable shards |
-| Retention policy | Configurable `RETENTION_DAYS`; automatic deletion of aged indices |
+| Retention policy | Configurable `RETENTION_DAYS` (default 730); automatic deletion of aged indices |
 | Encryption in transit | TLS 1.2/1.3 on Graylog web UI (self-signed CA) |
 | Data localisation | All data stored on-premises; no cloud sync |
 | Outbound traffic | Only the license check API call (`LICENSE_API_URL`) |
@@ -232,7 +285,11 @@ docker compose --env-file config.env stop graylog opensearch
 # Dump MongoDB
 docker exec plansb-mongodb mongodump --archive | gzip > backup-mongodb-$(date +%F).gz
 
-# Snapshot OpenSearch data volume
+# Snapshot OpenSearch data
+# If using DATA_PATH:
+tar czf backup-opensearch-$(date +%F).tar.gz -C ${DATA_PATH:-/var/lib/docker/volumes} opensearch
+
+# If using Docker named volumes:
 docker run --rm -v plansb_opensearch-data:/data -v $(pwd):/backup \
     busybox tar czf /backup/backup-opensearch-$(date +%F).tar.gz /data
 
@@ -284,23 +341,26 @@ sudo ./reconfigure.sh
 ## File Structure
 
 ```
-graylog-siem/
-├── docker-compose.yml          # Service definitions
-├── config.env.template         # Configuration template
-├── config.env                  # Active config (generated by install.sh)
-├── install.sh                  # First-time installer
-├── reconfigure.sh              # Apply config changes
+siem-docker/
+├── docker-compose.yml              # Service definitions
+├── docker-compose.override.yml     # Auto-generated bind mounts (if DATA_PATH set)
+├── config.env.template             # Configuration template
+├── config.env                      # Active config (generated by install.sh)
+├── install.sh                      # First-time installer
+├── reconfigure.sh                  # Apply config changes
+├── DEPLOY.md                       # Ubuntu/Linux deployment guide
+├── WINDOWS-DEPLOY.md               # Windows deployment guide
 ├── license-checker/
 │   ├── Dockerfile
-│   ├── checker.py              # License state machine
+│   ├── checker.py                  # License state machine
 │   └── requirements.txt
 ├── graylog/
-│   └── graylog.conf.template   # Graylog config template
+│   └── graylog.conf.template       # Graylog config template
 ├── certs/
-│   ├── generate-certs.sh       # TLS cert generator
-│   ├── ca.crt                  # Local CA (import into browsers)
-│   ├── graylog.crt             # Server certificate
-│   └── graylog.key             # Server private key (chmod 600)
+│   ├── generate-certs.sh           # TLS cert generator
+│   ├── ca.crt                      # Local CA (import into browsers)
+│   ├── graylog.crt                 # Server certificate
+│   └── graylog.key                 # Server private key (chmod 600)
 └── README.md
 ```
 
@@ -308,4 +368,4 @@ graylog-siem/
 
 ## Support
 
-Plan-B Systems — internal use only.
+Plan-B Systems — https://plan-b.systems

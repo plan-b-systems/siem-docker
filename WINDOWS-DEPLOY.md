@@ -7,7 +7,7 @@ Step-by-step instructions for deploying the SIEM stack on a Windows 10/11 machin
 ## Prerequisites
 
 - Windows 10 (21H2+) or Windows 11
-- Minimum 8 GB RAM, 100 GB free disk
+- Minimum 8 GB RAM, 200 GB free disk
 - Administrator access
 - Internet access
 - Virtualization enabled in BIOS (check: Task Manager → Performance → CPU → "Virtualization: Enabled")
@@ -101,12 +101,47 @@ git clone https://github.com/plan-b-systems/siem-docker.git /opt/plansb-siem
 cd /opt/plansb-siem
 ```
 
-> Use a **Personal Access Token** when prompted for a password.
-> Generate one at: GitHub → Settings → Developer settings → Personal access tokens → Classic → `repo` scope.
+> The repo is public — no credentials required.
 
 ---
 
-## Step 7 – Configure for the Client
+## Step 7 – (Optional) Set Up External Storage
+
+For 730-day log retention, you may want to use a dedicated drive. On Windows/WSL2 you have two options:
+
+### Option A: Use a secondary internal drive (e.g., D:\)
+
+Windows drives are automatically accessible in WSL2 at `/mnt/<drive-letter>`:
+
+```bash
+# Create data directory on D: drive
+sudo mkdir -p /mnt/d/siem-data
+```
+
+Set in `config.env`:
+```
+DATA_PATH=/mnt/d/siem-data
+```
+
+### Option B: Use an external USB drive
+
+1. Connect the USB drive and note the drive letter Windows assigns (e.g., E:)
+2. In the Ubuntu terminal:
+```bash
+sudo mkdir -p /mnt/e/siem-data
+```
+3. Set in `config.env`:
+```
+DATA_PATH=/mnt/e/siem-data
+```
+
+> **Important:** If using an external USB drive, make sure it's always connected before the SIEM starts. Windows auto-mounts USB drives into WSL2.
+
+> **Disk sizing guide:** ~10 devices → 200 GB, ~50 devices → 500 GB–1 TB, 200+ devices → 2–4 TB
+
+---
+
+## Step 8 – Configure for the Client
 
 ```bash
 cp config.env.template config.env
@@ -123,18 +158,19 @@ Fill in these values:
 | `HOST_IP` | Same IP as above | `192.168.1.50` |
 | `GRAYLOG_ADMIN_PASSWORD` | Strong admin password | `S3cur3P@ss!` |
 | `TIMEZONE` | Local timezone | `Asia/Jerusalem` |
-| `RETENTION_DAYS` | Days of logs to keep | `365` |
+| `RETENTION_DAYS` | Days of logs to keep | `730` |
+| `DATA_PATH` | External/secondary drive (optional) | `/mnt/d/siem-data` |
 | `OPENSEARCH_HEAP_SIZE` | Quarter of total RAM on Windows | `2g` for 8 GB host |
 
 > **Note on heap size:** Docker Desktop on Windows shares RAM with Windows itself.
-> Use **¼ of total RAM** (not ½ as on Linux) to avoid memory pressure.
+> Use **1/4 of total RAM** (not 1/2 as on Linux) to avoid memory pressure.
 > Example: 16 GB machine → use `4g`
 
 Save and exit: `Ctrl+X` → `Y` → `Enter`
 
 ---
 
-## Step 8 – Run the Installer
+## Step 9 – Run the Installer
 
 ```bash
 sudo ./install.sh
@@ -147,11 +183,13 @@ When complete you will see:
 ║              Installation complete!                  ║
 ╚══════════════════════════════════════════════════════╝
   Graylog UI  : https://<HOST_IP>:9000
+  Retention   : 730 days
+  Data path   : /mnt/d/siem-data (or Docker named volumes)
 ```
 
 ---
 
-## Step 9 – Open Windows Firewall Ports
+## Step 10 – Open Windows Firewall Ports
 
 Open **PowerShell as Administrator** on Windows and run:
 
@@ -172,7 +210,7 @@ Write-Host "Firewall rules added."
 
 ---
 
-## Step 10 – Verify and Access the UI
+## Step 11 – Verify and Access the UI
 
 Back in the Ubuntu terminal:
 
@@ -314,6 +352,14 @@ Run in Ubuntu terminal:
 cd /opt/plansb-siem && sudo ./reconfigure.sh
 ```
 
+**External USB drive not accessible in WSL2**
+
+Make sure the drive is connected and assigned a letter in Windows. Then in Ubuntu:
+```bash
+ls /mnt/e/    # replace 'e' with your drive letter
+```
+If it doesn't show, restart WSL2: `wsl --shutdown` (from PowerShell), then reopen Ubuntu.
+
 ---
 
 ## Deployment Checklist
@@ -322,8 +368,9 @@ cd /opt/plansb-siem && sudo ./reconfigure.sh
 - [ ] WSL2 installed and Ubuntu 24.04 running
 - [ ] Docker Desktop installed and engine running
 - [ ] `.wslconfig` created with `networkingMode=mirrored`
+- [ ] External/secondary drive set up (if needed for storage)
 - [ ] Repo cloned to `/opt/plansb-siem`
-- [ ] `config.env` filled in with client details
+- [ ] `config.env` filled in with client details (including `DATA_PATH` if using external storage)
 - [ ] `sudo ./install.sh` completed successfully
 - [ ] All 4 containers showing `(healthy)`
 - [ ] Windows Firewall rules added

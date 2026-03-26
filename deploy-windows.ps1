@@ -195,7 +195,12 @@ docker compose version 2>/dev/null || echo "Docker Compose check pending"
 echo "DONE"
 '@
 
-$installScript | wsl.exe -d $DISTRO -u root -- bash 2>&1 | ForEach-Object { Write-Host "  $_" }
+# Write script to temp file and execute (piping into wsl.exe is unreliable)
+$tmpScript = "C:\PlanB-SIEM\tmp-install.sh"
+New-Item -ItemType Directory -Path "C:\PlanB-SIEM" -Force | Out-Null
+$installScript | Set-Content -Path $tmpScript -NoNewline -Encoding utf8
+wsl.exe -d $DISTRO -u root -- bash -c "sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-install.sh && bash /mnt/c/PlanB-SIEM/tmp-install.sh" 2>&1 | ForEach-Object { Write-Host "  $_" }
+Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
 Write-Ok "Docker and tools installed"
 
 # ============================================================
@@ -250,7 +255,11 @@ echo "config.env generated"
 echo "DONE"
 "@
 
-$setupScript | wsl.exe -d $DISTRO -u root -- bash 2>&1 | ForEach-Object { Write-Host "  $_" }
+# Write script to temp file and execute (piping into wsl.exe is unreliable)
+$tmpScript = "C:\PlanB-SIEM\tmp-setup.sh"
+$setupScript | Set-Content -Path $tmpScript -NoNewline -Encoding utf8
+wsl.exe -d $DISTRO -u root -- bash -c "sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-setup.sh && bash /mnt/c/PlanB-SIEM/tmp-setup.sh" 2>&1 | ForEach-Object { Write-Host "  $_" }
+Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
 Write-Ok "Repository cloned and configured"
 
 # ============================================================

@@ -163,10 +163,15 @@ Start-Sleep -Seconds 3
 # Boot WSL back up and wait until ready
 Write-Ok "Restarting WSL..."
 $retries = 0
+$wslReady = ""
 do {
     $retries++
     Start-Sleep -Seconds 3
-    $wslReady = wsl.exe -d $DISTRO -- echo "ready" 2>&1
+    try {
+        $wslReady = wsl.exe -d $DISTRO -- echo "ready" 2>&1
+    } catch {
+        $wslReady = ""
+    }
 } while ($wslReady -notmatch "ready" -and $retries -lt 10)
 
 if ($wslReady -notmatch "ready") {

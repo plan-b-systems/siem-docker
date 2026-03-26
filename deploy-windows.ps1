@@ -147,38 +147,42 @@ if ([string]::IsNullOrWhiteSpace($DISTRO)) {
 Write-Ok "Using distro: $DISTRO"
 
 # ============================================================
-# 4. Configure .wslconfig (mirrored networking)
+# 4. WSL2 Networking - ensure DNS works
 # ============================================================
 Write-Step "WSL2 Networking"
 
-$wslConfig = "$env:USERPROFILE\.wslconfig"
-$wslContent = "[wsl2]`nnetworkingMode=mirrored"
-Set-Content -Path $wslConfig -Value $wslContent -NoNewline
-Write-Ok ".wslconfig set to mirrored networking"
+# Ensure WSL auto-generates resolv.conf for DNS
+wsl.exe -d $DISTRO -u root -- bash -c "
+    if grep -q 'generateResolvConf.*false' /etc/wsl.conf 2>/dev/null; then
+        sed -i 's/generateResolvConf.*=.*false/generateResolvConf = true/' /etc/wsl.conf
+    fi
+" 2>&1 | Out-Null
 
-# Restart WSL to apply networking change
-wsl --shutdown 2>&1 | Out-Null
-Start-Sleep -Seconds 3
-
-# Boot WSL back up and wait until ready
-Write-Ok "Restarting WSL..."
-$retries = 0
-$wslReady = ""
-do {
-    $retries++
+# Test DNS - if it fails, restart WSL to regenerate resolv.conf
+$dnsTest = wsl.exe -d $DISTRO -- bash -c "ping -c1 -W3 github.com >/dev/null 2>&1 && echo OK || echo FAIL" 2>&1
+if ($dnsTest -notmatch "OK") {
+    Write-Ok "Restarting WSL for DNS fix..."
+    wsl --shutdown 2>&1 | Out-Null
     Start-Sleep -Seconds 3
-    try {
-        $wslReady = wsl.exe -d $DISTRO -- echo "ready" 2>&1
-    } catch {
-        $wslReady = ""
-    }
-} while ($wslReady -notmatch "ready" -and $retries -lt 10)
 
-if ($wslReady -notmatch "ready") {
-    Write-Err "WSL failed to restart after shutdown. Try running: wsl --shutdown, then re-run this script."
-    exit 1
+    $retries = 0
+    $wslReady = ""
+    do {
+        $retries++
+        Start-Sleep -Seconds 3
+        try {
+            $wslReady = wsl.exe -d $DISTRO -- echo "ready" 2>&1
+        } catch {
+            $wslReady = ""
+        }
+    } while ($wslReady -notmatch "ready" -and $retries -lt 10)
+
+    if ($wslReady -notmatch "ready") {
+        Write-Err "WSL failed to restart. Try: wsl --shutdown, then re-run this script."
+        exit 1
+    }
 }
-Write-Ok "WSL is ready"
+Write-Ok "WSL networking is ready"
 
 # ============================================================
 # 5. Install Docker + tools inside WSL

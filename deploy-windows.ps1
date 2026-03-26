@@ -156,9 +156,24 @@ $wslContent = "[wsl2]`nnetworkingMode=mirrored"
 Set-Content -Path $wslConfig -Value $wslContent -NoNewline
 Write-Ok ".wslconfig set to mirrored networking"
 
-# Restart WSL to apply
+# Restart WSL to apply networking change
 wsl --shutdown 2>&1 | Out-Null
 Start-Sleep -Seconds 3
+
+# Boot WSL back up and wait until ready
+Write-Ok "Restarting WSL..."
+$retries = 0
+do {
+    $retries++
+    Start-Sleep -Seconds 3
+    $wslReady = wsl.exe -d $DISTRO -- echo "ready" 2>&1
+} while ($wslReady -notmatch "ready" -and $retries -lt 10)
+
+if ($wslReady -notmatch "ready") {
+    Write-Err "WSL failed to restart after shutdown. Try running: wsl --shutdown, then re-run this script."
+    exit 1
+}
+Write-Ok "WSL is ready"
 
 # ============================================================
 # 5. Install Docker + tools inside WSL

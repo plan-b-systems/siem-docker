@@ -151,6 +151,17 @@ Write-Ok "Using distro: $DISTRO"
 # ============================================================
 Write-Step "WSL2 Networking"
 
+# Clean up any broken .wslconfig (e.g. mirrored networking from a previous attempt)
+$wslConfig = "$env:USERPROFILE\.wslconfig"
+if (Test-Path $wslConfig) {
+    $content = Get-Content $wslConfig -Raw
+    if ($content -match "networkingMode") {
+        Write-Ok "Removing broken networkingMode from .wslconfig"
+        $content = $content -replace "networkingMode=.*", ""
+        Set-Content -Path $wslConfig -Value $content.Trim() -NoNewline
+    }
+}
+
 # Ensure WSL auto-generates resolv.conf for DNS
 wsl.exe -d $DISTRO -u root -- bash -c "
     if grep -q 'generateResolvConf.*false' /etc/wsl.conf 2>/dev/null; then

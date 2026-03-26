@@ -11,7 +11,7 @@
 #   4. Wait for completion (~10-15 minutes)
 # ============================================================
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
 
 # -- Colors --

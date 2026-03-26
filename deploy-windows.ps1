@@ -1,5 +1,5 @@
 # ============================================================
-# Plan-B Systems SIEM – Windows One-Shot Deployment
+# Plan-B Systems SIEM - Windows One-Shot Deployment
 # ============================================================
 # Run this script as Administrator on a fresh Windows machine.
 # It handles everything: WSL2, Docker, SIEM stack, auto-start.
@@ -14,7 +14,7 @@
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-# ── Colors ──
+# -- Colors --
 function Write-Step  { param($msg) Write-Host "`n== $msg ==" -ForegroundColor Cyan }
 function Write-Ok    { param($msg) Write-Host "  [OK]    $msg" -ForegroundColor Green }
 function Write-Warn  { param($msg) Write-Host "  [WARN]  $msg" -ForegroundColor Yellow }
@@ -27,7 +27,7 @@ Write-Host "  Graylog 7.2 + OpenSearch 2.x + MongoDB 7.0" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# ── Admin check ──
+# -- Admin check --
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     Write-Err "This script must be run as Administrator."
@@ -403,7 +403,7 @@ Write-Host ""
 Write-Host "  Logs        : C:\PlanB-SIEM\startup.log (Windows)" -ForegroundColor Gray
 Write-Host "                /var/log/plansb-siem-startup.log (WSL)" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  CA cert on Desktop — import to remove browser warning" -ForegroundColor Yellow
+Write-Host "  CA cert on Desktop - import to remove browser warning" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "  The SIEM will auto-start on every boot." -ForegroundColor Green
 Write-Host ""

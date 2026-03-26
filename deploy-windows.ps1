@@ -22,7 +22,7 @@ function Write-Err   { param($msg) Write-Host "  [ERROR] $msg" -ForegroundColor 
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "  Plan-B Systems SIEM – Windows Deployment" -ForegroundColor Cyan
+Write-Host "  Plan-B Systems SIEM - Windows Deployment" -ForegroundColor Cyan
 Write-Host "  Graylog 7.2 + OpenSearch 2.x + MongoDB 7.0" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
@@ -40,34 +40,34 @@ if (-not $isAdmin) {
 # ============================================================
 Write-Step "Client Configuration"
 
-$CLIENT_NAME = Read-Host "  Client name (short, no spaces, e.g. acme-tlv)"
+$CLIENT_NAME = Read-Host -Prompt "  Client name [short - no spaces - e.g. acme-tlv]"
 while ([string]::IsNullOrWhiteSpace($CLIENT_NAME) -or $CLIENT_NAME -match '\s') {
     Write-Warn "Client name cannot be empty or contain spaces"
-    $CLIENT_NAME = Read-Host "  Client name"
+    $CLIENT_NAME = Read-Host -Prompt "  Client name"
 }
 
-$CLIENT_ID = Read-Host "  Client ID (from Plan-B portal, e.g. XKR-a8Bf3kLm9Qp2wYnZ)"
+$CLIENT_ID = Read-Host -Prompt "  Client ID [from Plan-B portal]"
 while ([string]::IsNullOrWhiteSpace($CLIENT_ID)) {
     Write-Warn "Client ID is required"
-    $CLIENT_ID = Read-Host "  Client ID"
+    $CLIENT_ID = Read-Host -Prompt "  Client ID"
 }
 
 # Auto-detect LAN IP
 $defaultIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch "Loopback|vEthernet|WSL" -and $_.PrefixOrigin -ne "WellKnown" } | Select-Object -First 1).IPAddress
-$HOST_IP = Read-Host "  Machine LAN IP [$defaultIP]"
+$HOST_IP = Read-Host -Prompt "  Machine LAN IP [$defaultIP]"
 if ([string]::IsNullOrWhiteSpace($HOST_IP)) { $HOST_IP = $defaultIP }
 
-$ADMIN_PASSWORD = Read-Host "  Graylog admin password (min 8 chars)"
+$ADMIN_PASSWORD = Read-Host -Prompt "  Graylog admin password [min 8 chars]"
 while ([string]::IsNullOrWhiteSpace($ADMIN_PASSWORD) -or $ADMIN_PASSWORD.Length -lt 8) {
     Write-Warn "Password must be at least 8 characters"
-    $ADMIN_PASSWORD = Read-Host "  Graylog admin password"
+    $ADMIN_PASSWORD = Read-Host -Prompt "  Graylog admin password"
 }
 
 # Optional settings with defaults
-$TIMEZONE = Read-Host "  Timezone [Asia/Jerusalem]"
+$TIMEZONE = Read-Host -Prompt "  Timezone [Asia/Jerusalem]"
 if ([string]::IsNullOrWhiteSpace($TIMEZONE)) { $TIMEZONE = "Asia/Jerusalem" }
 
-$RETENTION_DAYS = Read-Host "  Log retention days [730]"
+$RETENTION_DAYS = Read-Host -Prompt "  Log retention days [730]"
 if ([string]::IsNullOrWhiteSpace($RETENTION_DAYS)) { $RETENTION_DAYS = "730" }
 
 # RAM-based heap calculation
@@ -76,11 +76,11 @@ $heapSize = [math]::Max(1, [math]::Floor($totalRAM / 4))
 $HEAP = "${heapSize}g"
 Write-Ok "Detected ${totalRAM} GB RAM -> OpenSearch heap: ${HEAP}"
 
-$DATA_PATH = Read-Host "  External data path (leave empty for Docker volumes)"
+$DATA_PATH = Read-Host -Prompt "  External data path [leave empty for Docker volumes]"
 
 Write-Host ""
 Write-Host "  Configuration Summary:" -ForegroundColor White
-Write-Host "  ─────────────────────────────────"
+Write-Host "  ------------------------------------"
 Write-Host "  Client:     $CLIENT_NAME"
 Write-Host "  Client ID:  $CLIENT_ID"
 Write-Host "  LAN IP:     $HOST_IP"
@@ -90,7 +90,7 @@ Write-Host "  Heap:       $HEAP"
 if ($DATA_PATH) { Write-Host "  Data Path:  $DATA_PATH" }
 Write-Host ""
 
-$confirm = Read-Host "  Proceed with deployment? (y/n)"
+$confirm = Read-Host -Prompt "  Proceed with deployment? [y/n]"
 if ($confirm -ne "y") {
     Write-Host "Deployment cancelled." -ForegroundColor Yellow
     exit 0

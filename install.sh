@@ -252,6 +252,26 @@ else
     info "Java truststore already exists – skipping"
 fi
 
+# Import our CA cert into the truststore so Graylog trusts its own TLS cert
+CA_CERT="${SCRIPT_DIR}/certs/ca.crt"
+if [[ -f "$CACERTS_FILE" && -f "$CA_CERT" ]]; then
+    # Use keytool from the Graylog image (avoids installing JRE on host)
+    GRAYLOG_IMG="${GRAYLOG_IMAGE:-graylog/graylog:7.0}"
+    TMP_CONTAINER=$(docker create -v "$CACERTS_FILE:/tmp/cacerts" -v "$CA_CERT:/tmp/ca.crt" "$GRAYLOG_IMG" 2>/dev/null)
+    if docker start "$TMP_CONTAINER" &>/dev/null && \
+       docker exec "$TMP_CONTAINER" keytool -list -keystore /tmp/cacerts -storepass changeit -alias plansb-ca &>/dev/null; then
+        info "CA cert already in truststore"
+    else
+        if docker exec "$TMP_CONTAINER" keytool -importcert -keystore /tmp/cacerts -storepass changeit -alias plansb-ca -file /tmp/ca.crt -noprompt &>/dev/null; then
+            docker cp "$TMP_CONTAINER:/tmp/cacerts" "$CACERTS_FILE"
+            info "CA cert imported into Java truststore"
+        else
+            warn "Could not import CA cert into truststore – Graylog may show certificate warnings"
+        fi
+    fi
+    docker rm -f "$TMP_CONTAINER" &>/dev/null || true
+fi
+
 # ════════════════════════════════════════════════════════════
 # 6. Render Graylog config from template
 # ════════════════════════════════════════════════════════════

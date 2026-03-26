@@ -472,12 +472,29 @@ docker compose --env-file config.env up -d license-checker
 info "License checker started"
 
 # ════════════════════════════════════════════════════════════
-# 13. Configure systemd auto-start on boot
+# 13. Configure auto-start and resilience
 # ════════════════════════════════════════════════════════════
-step "Configuring systemd service"
+step "Configuring auto-start"
 
-UNIT_FILE="/etc/systemd/system/plansb-siem.service"
-cat > "$UNIT_FILE" <<UNIT
+IS_WSL2=false
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    IS_WSL2=true
+fi
+
+if $IS_WSL2 && [[ -x "${SCRIPT_DIR}/resilience/setup-resilience.sh" ]]; then
+    step "WSL2 detected – installing resilience (auto-recovery on boot/crash)"
+    bash "${SCRIPT_DIR}/resilience/setup-resilience.sh" "${SCRIPT_DIR}"
+else
+    # Native Linux: simple systemd service
+    UNIT_FILE="/etc/systemd/system/plansb-siem.service"
+
+    # Use stale process cleanup if available
+    EXEC_START_PRE=""
+    if [[ -x "${SCRIPT_DIR}/resilience/clean-stale-processes.sh" ]]; then
+        EXEC_START_PRE="ExecStartPre=${SCRIPT_DIR}/resilience/clean-stale-processes.sh"
+    fi
+
+    cat > "$UNIT_FILE" <<UNIT
 [Unit]
 Description=Plan-B Systems SIEM Stack
 After=docker.service network-online.target
@@ -488,6 +505,7 @@ Requires=docker.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${SCRIPT_DIR}
+${EXEC_START_PRE}
 ExecStart=/usr/bin/docker compose --env-file config.env up -d
 ExecStop=/usr/bin/docker compose --env-file config.env down
 TimeoutStartSec=300
@@ -496,9 +514,10 @@ TimeoutStartSec=300
 WantedBy=multi-user.target
 UNIT
 
-systemctl daemon-reload
-systemctl enable plansb-siem.service
-info "systemd service enabled (plansb-siem.service)"
+    systemctl daemon-reload
+    systemctl enable plansb-siem.service
+    info "systemd service enabled (plansb-siem.service)"
+fi
 
 # ════════════════════════════════════════════════════════════
 # Done

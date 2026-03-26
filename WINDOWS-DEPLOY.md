@@ -1,6 +1,6 @@
 # Plan-B Systems SIEM – Windows Deployment Guide
 
-Step-by-step instructions for deploying the SIEM stack on a Windows 10/11 machine using Docker Desktop with WSL2.
+Step-by-step instructions for deploying the SIEM stack on a Windows 10/11 machine using WSL2 with Docker installed natively (no Docker Desktop required).
 
 ---
 
@@ -35,22 +35,7 @@ When it finishes, Ubuntu will open and ask you to create a Linux username and pa
 
 ---
 
-## Step 2 – Install Docker Desktop
-
-1. Download Docker Desktop from: **https://www.docker.com/products/docker-desktop/**
-2. Run the installer — accept defaults, ensure **"Use WSL2 instead of Hyper-V"** is checked
-3. Restart when prompted
-4. Open Docker Desktop, accept the license, wait for it to show **"Engine running"**
-
-Verify in PowerShell:
-```powershell
-docker version
-docker compose version
-```
-
----
-
-## Step 3 – Configure WSL2 Networking (Mirrored Mode)
+## Step 2 – Configure WSL2 Networking (Mirrored Mode)
 
 By default, Docker ports in WSL2 are **not** accessible via the machine's LAN IP. This must be fixed so client devices can send logs to the SIEM.
 
@@ -76,28 +61,37 @@ Reopen the Ubuntu terminal after this.
 
 ---
 
-## Step 4 – Open Ubuntu Terminal
+## Step 3 – Install Docker in WSL2
 
-Click **Start → Ubuntu 24.04** (or search for it).
-
-All remaining steps run inside this Ubuntu terminal.
-
----
-
-## Step 5 – Install Required Tools
-
-Inside the Ubuntu terminal:
+Open **Ubuntu terminal** (Start → Ubuntu 24.04) and run:
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git gettext-base openssl
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+
+# Add your user to the docker group
+sudo usermod -aG docker $USER
+
+# Install required tools
+sudo apt-get install -y git gettext-base openssl
+
+# Log out and back in for group changes
+exit
+```
+
+Reopen the Ubuntu terminal, then verify:
+```bash
+docker version
+docker compose version
 ```
 
 ---
 
-## Step 6 – Clone the Repository
+## Step 4 – Clone the Repository
 
 ```bash
-git clone https://github.com/plan-b-systems/siem-docker.git /opt/plansb-siem
+sudo git clone https://github.com/plan-b-systems/siem-docker.git /opt/plansb-siem
+sudo chown -R $USER:$USER /opt/plansb-siem
 cd /opt/plansb-siem
 ```
 
@@ -105,7 +99,7 @@ cd /opt/plansb-siem
 
 ---
 
-## Step 7 – (Optional) Set Up External Storage
+## Step 5 – (Optional) Set Up External Storage
 
 For 730-day log retention, you may want to use a dedicated drive. On Windows/WSL2 you have two options:
 
@@ -141,7 +135,7 @@ DATA_PATH=/mnt/e/siem-data
 
 ---
 
-## Step 8 – Configure for the Client
+## Step 6 – Configure for the Client
 
 ```bash
 cp config.env.template config.env
@@ -162,7 +156,7 @@ Fill in these values:
 | `DATA_PATH` | External/secondary drive (optional) | `/mnt/d/siem-data` |
 | `OPENSEARCH_HEAP_SIZE` | Quarter of total RAM on Windows | `2g` for 8 GB host |
 
-> **Note on heap size:** Docker Desktop on Windows shares RAM with Windows itself.
+> **Note on heap size:** WSL2 shares RAM with Windows itself.
 > Use **1/4 of total RAM** (not 1/2 as on Linux) to avoid memory pressure.
 > Example: 16 GB machine → use `4g`
 
@@ -170,11 +164,25 @@ Save and exit: `Ctrl+X` → `Y` → `Enter`
 
 ---
 
-## Step 9 – Run the Installer
+## Step 7 – Start Docker and Run the Installer
 
+Start the Docker daemon:
+```bash
+sudo dockerd &>/var/log/dockerd.log &
+sleep 3
+```
+
+Run the installer:
 ```bash
 sudo ./install.sh
 ```
+
+The installer will:
+- Generate TLS certificates
+- Pull and build all Docker images
+- Start the SIEM stack (MongoDB, OpenSearch, Graylog, License Checker)
+- Configure Graylog inputs and retention
+- **Install auto-recovery** (WSL boot script, systemd service, health checks)
 
 When complete you will see:
 
@@ -184,37 +192,50 @@ When complete you will see:
 ╚══════════════════════════════════════════════════════╝
   Graylog UI  : https://<HOST_IP>:9000
   Retention   : 730 days
-  Data path   : /mnt/d/siem-data (or Docker named volumes)
 ```
 
 ---
 
-## Step 10 – Open Windows Firewall Ports
+## Step 8 – Register Auto-Start on Windows Boot
 
-Open **PowerShell as Administrator** on Windows and run:
+The installer sets up auto-recovery inside WSL, but Windows needs a scheduled task to start WSL on boot and configure port forwarding.
+
+Open **PowerShell as Administrator** and run:
 
 ```powershell
-$ports = @(9000, 1514, 12202)
-$udpPorts = @(514, 12201)
-
-foreach ($port in $ports) {
-    New-NetFirewallRule -DisplayName "PlanB-SIEM-TCP-$port" `
-        -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow -Profile Any
-}
-foreach ($port in $udpPorts) {
-    New-NetFirewallRule -DisplayName "PlanB-SIEM-UDP-$port" `
-        -Direction Inbound -Protocol UDP -LocalPort $port -Action Allow -Profile Any
-}
-Write-Host "Firewall rules added."
+powershell -ExecutionPolicy Bypass -File "C:\PlanB-SIEM\Register-ScheduledTask.ps1"
 ```
+
+This registers a task that runs at every Windows startup and login:
+1. Starts WSL and the Docker daemon
+2. Waits for all SIEM containers to be healthy
+3. Sets up port forwarding (so the LAN IP works)
+4. Configures Windows Firewall rules
 
 ---
 
-## Step 11 – Verify and Access the UI
+## Step 9 – Restart WSL to Activate
+
+The installer configured `/etc/wsl.conf` for auto-start. Activate it:
+
+From **PowerShell**:
+```powershell
+wsl --shutdown
+```
+
+Then reopen the Ubuntu terminal. The SIEM stack should start automatically within ~2 minutes.
+
+---
+
+## Step 10 – Verify and Access the UI
 
 Back in the Ubuntu terminal:
 
 ```bash
+# Quick health check
+/opt/plansb-siem/resilience/health-check.sh
+
+# Or check containers directly
 docker compose --env-file config.env ps
 ```
 
@@ -246,35 +267,29 @@ The stack generates a self-signed certificate. To remove the browser warning, im
 
 ---
 
-## Auto-Start on Windows Boot
+## How Auto-Recovery Works
 
-The SIEM stack needs to start automatically when Windows boots. Create a scheduled task to handle this.
+After installation, the SIEM stack recovers automatically from any shutdown (graceful or power loss):
 
-Open **PowerShell as Administrator**:
-
-```powershell
-$action = New-ScheduledTaskAction `
-    -Execute "wsl.exe" `
-    -Argument "-d Ubuntu-24.04 -- bash -c 'cd /opt/plansb-siem && docker compose --env-file config.env up -d'"
-
-$trigger = New-ScheduledTaskTrigger -AtStartup
-
-$settings = New-ScheduledTaskSettingsSet `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
-    -RestartCount 3 `
-    -RestartInterval (New-TimeSpan -Minutes 1)
-
-Register-ScheduledTask `
-    -TaskName "PlanB-SIEM-Autostart" `
-    -Action $action `
-    -Trigger $trigger `
-    -RunLevel Highest `
-    -User "SYSTEM" `
-    -Settings $settings `
-    -Force
-
-Write-Host "Auto-start task registered."
 ```
+Windows boots
+  → Scheduled Task runs PlanB-SIEM-Startup.ps1
+    → Starts WSL
+    → WSL boots with systemd (via wsl.conf)
+      → Docker daemon auto-starts
+      → Stale processes cleaned (prevents port conflicts)
+      → docker compose up -d
+    → PowerShell waits for Graylog health
+    → Sets up port forwarding (netsh portproxy)
+    → Ensures firewall rules exist
+```
+
+Additionally, a cron job runs `health-check.sh --fix` every 5 minutes to restart any container that crashes.
+
+**Logs:**
+- WSL startup: `/var/log/plansb-siem-startup.log`
+- Windows startup: `C:\PlanB-SIEM\startup.log`
+- Health checks: `/var/log/plansb-siem-health.log`
 
 ---
 
@@ -295,6 +310,9 @@ sudo ./reconfigure.sh    # applies changes, restarts affected containers
 ```bash
 # Stack status
 docker compose --env-file config.env ps
+
+# Full health check
+/opt/plansb-siem/resilience/health-check.sh
 
 # Live logs
 docker compose --env-file config.env logs -f
@@ -318,31 +336,60 @@ docker exec plansb-opensearch curl -s localhost:9200/_cat/indices?v
 
 **"This site can't be reached" from browser**
 
-WSL2 mirrored networking may not have taken effect. Run in PowerShell as Administrator:
+Port forwarding may not be active. From PowerShell as Administrator:
 ```powershell
-# Get WSL2 internal IP
-$wsl2ip = (wsl hostname -I).Trim().Split()[0]
+# Check current port forwarding rules
+netsh interface portproxy show all
 
-# Add port proxy
-netsh interface portproxy add v4tov4 listenport=9000 listenaddress=0.0.0.0 connectport=9000 connectaddress=$wsl2ip
-netsh interface portproxy add v4tov4 listenport=1514 listenaddress=0.0.0.0 connectport=1514 connectaddress=$wsl2ip
-netsh interface portproxy add v4tov4 listenport=12202 listenaddress=0.0.0.0 connectport=12202 connectaddress=$wsl2ip
+# If empty, run the startup script manually:
+C:\PlanB-SIEM\PlanB-SIEM-Startup.ps1
 ```
 
-**Docker Desktop not starting**
+**Docker daemon not starting in WSL**
 
-Open Docker Desktop manually from Start menu. Wait for "Engine running" status before running any docker commands.
+```bash
+# Check if Docker is running
+docker info
+
+# If not, start it manually
+sudo dockerd &>/var/log/dockerd.log &
+
+# Or from PowerShell:
+wsl -u root dockerd
+```
 
 **Containers not starting after reboot**
 
-Open Ubuntu terminal and run:
 ```bash
+# Check container status
+docker ps -a
+
+# Run health check with auto-fix
+/opt/plansb-siem/resilience/health-check.sh --fix
+
+# Or start manually
 cd /opt/plansb-siem && docker compose --env-file config.env up -d
+```
+
+**Port conflict (address already in use)**
+
+This happens when stale processes hold ports after a crash:
+```bash
+# Run the cleanup script
+sudo /opt/plansb-siem/resilience/clean-stale-processes.sh
+
+# Then restart
+docker compose --env-file config.env up -d
 ```
 
 **Not enough memory errors**
 
-Limit Docker Desktop's RAM usage. Open Docker Desktop → Settings → Resources → Memory → set to 60% of total RAM.
+Limit WSL2's RAM usage. Create/edit `C:\Users\<Username>\.wslconfig`:
+```ini
+[wsl2]
+networkingMode=mirrored
+memory=6GB
+```
 Then reduce `OPENSEARCH_HEAP_SIZE` in `config.env` and run `./reconfigure.sh`.
 
 **Certificate errors in Graylog search**
@@ -366,16 +413,17 @@ If it doesn't show, restart WSL2: `wsl --shutdown` (from PowerShell), then reope
 
 - [ ] Virtualization enabled in BIOS
 - [ ] WSL2 installed and Ubuntu 24.04 running
-- [ ] Docker Desktop installed and engine running
 - [ ] `.wslconfig` created with `networkingMode=mirrored`
+- [ ] Docker installed natively in WSL2 (via get.docker.com)
 - [ ] External/secondary drive set up (if needed for storage)
 - [ ] Repo cloned to `/opt/plansb-siem`
 - [ ] `config.env` filled in with client details (including `DATA_PATH` if using external storage)
 - [ ] `sudo ./install.sh` completed successfully
 - [ ] All 4 containers showing `(healthy)`
-- [ ] Windows Firewall rules added
+- [ ] Scheduled task registered (`C:\PlanB-SIEM\Register-ScheduledTask.ps1`)
+- [ ] WSL restarted (`wsl --shutdown`) to activate auto-start
 - [ ] Graylog UI accessible in browser at `https://<IP>:9000`
 - [ ] `plansb-ca.crt` imported into Windows certificate store
-- [ ] Auto-start scheduled task registered
+- [ ] Health check passing: `/opt/plansb-siem/resilience/health-check.sh`
 - [ ] At least one log source sending data
 - [ ] Admin password noted in client handover doc

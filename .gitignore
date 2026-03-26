@@ -4,8 +4,9 @@ config.env
 # ── Generated Graylog config (contains secrets) ─────────────
 graylog/graylog.conf
 
-# ── TLS private keys & generated artifacts ──────────────────
+# ── TLS certificates & keys (all generated per-install) ─────
 certs/ca.key
+certs/ca.crt
 certs/graylog.key
 certs/graylog.crt
 certs/graylog.csr

@@ -228,6 +228,31 @@ chmod 600 certs/ca.key 2>/dev/null || true       # CA key stays private
 chmod 644 certs/graylog.key 2>/dev/null || true  # server key readable by Graylog container (uid 1100)
 
 # ════════════════════════════════════════════════════════════
+# 5b. Java truststore (cacerts) for Graylog
+# ════════════════════════════════════════════════════════════
+step "Preparing Java truststore"
+
+CACERTS_FILE="${SCRIPT_DIR}/graylog/cacerts"
+if [[ -d "$CACERTS_FILE" ]]; then
+    # Clean up if it was accidentally created as a directory
+    rm -rf "$CACERTS_FILE"
+fi
+
+if [[ ! -f "$CACERTS_FILE" ]]; then
+    info "Extracting default Java cacerts from Graylog image …"
+    GRAYLOG_IMG="${GRAYLOG_IMAGE:-graylog/graylog:7.0}"
+    TMP_CONTAINER=$(docker create "$GRAYLOG_IMG" 2>/dev/null)
+    if docker cp "${TMP_CONTAINER}:/opt/java/openjdk/lib/security/cacerts" "$CACERTS_FILE" 2>/dev/null; then
+        info "Java truststore extracted"
+    else
+        warn "Could not extract cacerts – Graylog may show certificate warnings for internal connections"
+    fi
+    docker rm -f "$TMP_CONTAINER" &>/dev/null || true
+else
+    info "Java truststore already exists – skipping"
+fi
+
+# ════════════════════════════════════════════════════════════
 # 6. Render Graylog config from template
 # ════════════════════════════════════════════════════════════
 step "Rendering Graylog configuration"

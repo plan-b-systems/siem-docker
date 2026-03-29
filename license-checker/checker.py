@@ -37,7 +37,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 # ── Configuration ────────────────────────────────────────────────────────
 
-LICENSE_API_URL      = os.environ.get("LICENSE_API_URL",   "https://api.plan-b.systems/license/check")
+LICENSE_API_URL      = os.environ.get("LICENSE_API_URL",   "https://siemsys.plan-b.co.il/api/license/check")
 CLIENT_ID            = os.environ.get("CLIENT_ID",         "")
 GRACE_PERIOD_DAYS    = int(os.environ.get("GRACE_PERIOD_DAYS", "7"))
 STATE_FILE           = Path(os.environ.get("STATE_FILE",   "/data/license_state.json"))

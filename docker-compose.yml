@@ -181,7 +181,7 @@ services:
       - license-data:/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      LICENSE_API_URL: "${LICENSE_API_URL:-https://api.plan-b.systems/license/check}"
+      LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.co.il/api/license/check}"
       CLIENT_ID: "${CLIENT_ID}"
       GRACE_PERIOD_DAYS: "${GRACE_PERIOD_DAYS:-7}"
       GRAYLOG_CONTAINER: "plansb-graylog"

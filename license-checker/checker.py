@@ -38,6 +38,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 # ── Configuration ────────────────────────────────────────────────────────
 
 LICENSE_API_URL      = os.environ.get("LICENSE_API_URL",   "https://siemsys.plan-b.co.il/api/license/check")
+HEALTH_API_URL       = os.environ.get("HEALTH_API_URL",    "https://siemsys.plan-b.co.il/api/health-report")
 CLIENT_ID            = os.environ.get("CLIENT_ID",         "")
 GRACE_PERIOD_DAYS    = int(os.environ.get("GRACE_PERIOD_DAYS", "7"))
 STATE_FILE           = Path(os.environ.get("STATE_FILE",   "/data/license_state.json"))
@@ -45,6 +46,8 @@ LOG_FILE             = Path(os.environ.get("LOG_FILE",     "/data/license_checke
 TZ_NAME              = os.environ.get("TZ",                "UTC")
 GRAYLOG_CONTAINER    = os.environ.get("GRAYLOG_CONTAINER",    "plansb-graylog")
 OPENSEARCH_CONTAINER = os.environ.get("OPENSEARCH_CONTAINER", "plansb-opensearch")
+MONGODB_CONTAINER    = os.environ.get("MONGODB_CONTAINER",    "plansb-mongodb")
+VERSION              = os.environ.get("VERSION",              "1.01")
 
 # ── State constants ──────────────────────────────────────────────────────
 
@@ -200,6 +203,149 @@ def call_license_api() -> tuple[bool, bool | None, str | None]:
         log.error("Unexpected error contacting license API: %s", exc)
     return False, None, None
 
+# ── Health metrics collection ────────────────────────────────────────────
+
+def _get_container_status(client, name: str) -> str:
+    """Return container status: running, stopped, unhealthy, or not_found."""
+    container = _find_container(client, name)
+    if container is None:
+        return "not_found"
+    status = container.status  # running, exited, paused, etc.
+    if status == "running":
+        # Check health if available
+        try:
+            health = container.attrs.get("State", {}).get("Health", {}).get("Status", "")
+            if health == "unhealthy":
+                return "unhealthy"
+        except Exception:
+            pass
+        return "running"
+    return "stopped"
+
+
+def _get_disk_usage() -> dict:
+    """Get disk usage of the data volume (where OpenSearch stores data)."""
+    try:
+        import shutil
+        # Check /usr/share/opensearch/data (mounted volume) or fallback to /
+        for path in ["/data", "/usr/share/opensearch/data", "/"]:
+            if os.path.exists(path):
+                usage = shutil.disk_usage(path)
+                return {
+                    "disk_total_gb": round(usage.total / (1024**3), 1),
+                    "disk_used_gb": round(usage.used / (1024**3), 1),
+                    "disk_percent": round((usage.used / usage.total) * 100, 1),
+                }
+    except Exception as exc:
+        log.debug("Disk usage error: %s", exc)
+    return {}
+
+
+def _get_memory_usage() -> dict:
+    """Get system memory usage."""
+    try:
+        with open("/proc/meminfo", "r") as f:
+            lines = {l.split(":")[0]: int(l.split(":")[1].strip().split()[0])
+                     for l in f if ":" in l}
+        total = lines.get("MemTotal", 0) / (1024 * 1024)  # GB
+        available = lines.get("MemAvailable", 0) / (1024 * 1024)
+        used = total - available
+        return {
+            "mem_total_gb": round(total, 1),
+            "mem_used_gb": round(used, 1),
+            "mem_percent": round((used / total) * 100, 1) if total > 0 else 0,
+        }
+    except Exception as exc:
+        log.debug("Memory usage error: %s", exc)
+    return {}
+
+
+def _get_uptime_hours() -> float | None:
+    """Get system uptime in hours."""
+    try:
+        with open("/proc/uptime", "r") as f:
+            return round(float(f.read().split()[0]) / 3600, 1)
+    except Exception:
+        return None
+
+
+def _get_opensearch_stats(client) -> dict:
+    """Query OpenSearch for cluster health and index stats."""
+    result = {}
+    container = _find_container(client, OPENSEARCH_CONTAINER)
+    if container is None or container.status != "running":
+        return result
+    try:
+        # Cluster health
+        exit_code, output = container.exec_run(
+            "curl -sf http://localhost:9200/_cluster/health", demux=True
+        )
+        if exit_code == 0 and output[0]:
+            health = json.loads(output[0].decode())
+            result["os_cluster_health"] = health.get("status", "unknown")
+
+        # Index stats
+        exit_code, output = container.exec_run(
+            "curl -sf http://localhost:9200/_stats/store,docs", demux=True
+        )
+        if exit_code == 0 and output[0]:
+            stats = json.loads(output[0].decode())
+            all_stats = stats.get("_all", {}).get("primaries", {})
+            result["os_doc_count"] = all_stats.get("docs", {}).get("count", 0)
+            result["os_store_size_gb"] = round(
+                all_stats.get("store", {}).get("size_in_bytes", 0) / (1024**3), 2
+            )
+            result["os_index_count"] = len(stats.get("indices", {}))
+    except Exception as exc:
+        log.debug("OpenSearch stats error: %s", exc)
+    return result
+
+
+def collect_health() -> dict:
+    """Collect all system health metrics."""
+    client = _docker_client()
+    metrics = {
+        "client_id": CLIENT_ID,
+        "version": VERSION,
+    }
+
+    # Disk & Memory
+    metrics.update(_get_disk_usage())
+    metrics.update(_get_memory_usage())
+    metrics["uptime_hours"] = _get_uptime_hours()
+
+    # Container statuses
+    if client:
+        metrics["graylog_status"] = _get_container_status(client, GRAYLOG_CONTAINER)
+        metrics["opensearch_status"] = _get_container_status(client, OPENSEARCH_CONTAINER)
+        metrics["mongodb_status"] = _get_container_status(client, MONGODB_CONTAINER)
+        metrics["license_checker_status"] = "running"
+
+        # OpenSearch stats
+        metrics.update(_get_opensearch_stats(client))
+
+    return metrics
+
+
+def send_health_report() -> None:
+    """Collect health metrics and send to the portal."""
+    try:
+        metrics = collect_health()
+        resp = requests.post(HEALTH_API_URL, json=metrics, timeout=30, verify=True)
+        if resp.status_code == 200:
+            log.info("Health report sent: disk=%s%% mem=%s%% containers=%s/%s/%s cluster=%s",
+                     metrics.get("disk_percent", "?"),
+                     metrics.get("mem_percent", "?"),
+                     metrics.get("graylog_status", "?"),
+                     metrics.get("opensearch_status", "?"),
+                     metrics.get("mongodb_status", "?"),
+                     metrics.get("os_cluster_health", "?"))
+        else:
+            log.warning("Health report failed: HTTP %d", resp.status_code)
+    except Exception as exc:
+        log.debug("Health report error: %s", exc)
+
+
 # ── Scheduler (module-level so jobs can reschedule themselves) ───────────
 
 scheduler: BackgroundScheduler = BackgroundScheduler(timezone=TZ_NAME)
@@ -318,7 +464,7 @@ def run_license_check() -> None:
 
 def main() -> None:
     log.info("=" * 60)
-    log.info("Plan-B Systems License Checker  v1.0")
+    log.info("Plan-B Systems License Checker  v%s", VERSION)
     log.info("Client ID   : %s", CLIENT_ID)
     log.info("License API : %s", LICENSE_API_URL)
     log.info("Grace period: %d days", GRACE_PERIOD_DAYS)
@@ -349,8 +495,23 @@ def main() -> None:
         coalesce=True,
     )
 
+    # ── Health reporting — every hour ────────────────────────
+    scheduler.add_job(
+        send_health_report,
+        trigger=IntervalTrigger(hours=1),
+        id="health_report",
+        name="Health report",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # ── Send initial health report on startup ─────────────
+    log.info("Sending initial health report …")
+    send_health_report()
+
     scheduler.start()
-    log.info("Scheduler started. License checker running.")
+    log.info("Scheduler started. License checker + health reporting running.")
 
     try:
         while True:

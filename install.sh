@@ -278,10 +278,11 @@ if [[ -f "$CACERTS_FILE" && -f "$CA_CERT" ]]; then
     else
         # Import CA cert — run keytool directly, bypassing Graylog entrypoint
         cp "$CACERTS_FILE" "${CACERTS_FILE}.bak"
-        if docker run --rm --entrypoint keytool \
+        chmod 666 "$CACERTS_FILE"  # writable by container user
+        if docker run --rm --user root --entrypoint keytool \
             -v "$CACERTS_FILE:/tmp/cacerts" \
             -v "$CA_CERT:/tmp/ca.crt:ro" \
-            "$GRAYLOG_IMG" -importcert -keystore /tmp/cacerts -storepass changeit -alias plansb-ca -file /tmp/ca.crt -noprompt &>/dev/null; then
+            "$GRAYLOG_IMG" -importcert -keystore /tmp/cacerts -storepass changeit -alias plansb-ca -file /tmp/ca.crt -noprompt 2>&1; then
             info "CA cert imported into Java truststore"
             rm -f "${CACERTS_FILE}.bak"
         else

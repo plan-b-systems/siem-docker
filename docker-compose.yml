@@ -10,6 +10,12 @@ networks:
     ipam:
       config:
         - subnet: 172.20.0.0/24
+  siem-internal:
+    driver: bridge
+    internal: true  # no external access — backend only
+    ipam:
+      config:
+        - subnet: 172.20.1.0/24
 
 volumes:
   mongodb-data:
@@ -26,13 +32,15 @@ services:
     container_name: plansb-mongodb
     restart: unless-stopped
     networks:
-      - siem-net
+      - siem-internal
     volumes:
       - mongodb-data:/data/db
     environment:
+      MONGO_INITDB_ROOT_USERNAME: "${MONGO_USER:-graylog}"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGO_PASSWORD}"
       TZ: "${TIMEZONE:-Asia/Jerusalem}"
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test: ["CMD", "mongosh", "-u", "${MONGO_USER:-graylog}", "-p", "${MONGO_PASSWORD}", "--quiet", "--eval", "db.adminCommand('ping').ok"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -52,7 +60,7 @@ services:
     container_name: plansb-opensearch
     restart: unless-stopped
     networks:
-      - siem-net
+      - siem-internal
     volumes:
       - opensearch-data:/usr/share/opensearch/data
     environment:
@@ -61,7 +69,7 @@ services:
       discovery.type: "single-node"
       OPENSEARCH_JAVA_OPTS: "-Xms${OPENSEARCH_HEAP_SIZE:-2g} -Xmx${OPENSEARCH_HEAP_SIZE:-2g}"
       bootstrap.memory_lock: "true"
-      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_SECURITY_PLUGIN: "true"  # Mitigated: OpenSearch on internal-only network, no external port exposure
       DISABLE_INSTALL_DEMO_CONFIG: "true"
       indices.query.bool.max_clause_count: "32768"
       action.auto_create_index: "false"
@@ -97,7 +105,8 @@ services:
     container_name: plansb-graylog
     restart: unless-stopped
     networks:
-      - siem-net
+      - siem-net       # external: web UI + syslog/GELF ports
+      - siem-internal  # internal: MongoDB + OpenSearch
     depends_on:
       mongodb:
         condition: service_healthy
@@ -133,7 +142,7 @@ services:
       GRAYLOG_ELASTICSEARCH_ROTATION_STRATEGY: "time"
       GRAYLOG_ELASTICSEARCH_MAX_SIZE_PER_INDEX: "1073741824"
       # MongoDB
-      GRAYLOG_MONGODB_URI: "mongodb://mongodb:27017/graylog"
+      GRAYLOG_MONGODB_URI: "mongodb://${MONGO_USER:-graylog}:${MONGO_PASSWORD}@mongodb:27017/graylog?authSource=admin"
       # Processing
       GRAYLOG_PROCESSBUFFER_PROCESSORS: "5"
       GRAYLOG_OUTPUTBUFFER_PROCESSORS: "3"
@@ -144,7 +153,9 @@ services:
       # Timezone
       TZ: "${TIMEZONE:-Asia/Jerusalem}"
     ports:
-      - "0.0.0.0:${GRAYLOG_WEB_PORT:-9000}:9000"
+      # Web UI: bind to LAN IP only (set BIND_ADDRESS in config.env, default 0.0.0.0)
+      - "${BIND_ADDRESS:-0.0.0.0}:${GRAYLOG_WEB_PORT:-9000}:9000"
+      # Syslog/GELF inputs: must accept from network devices
       - "0.0.0.0:${SYSLOG_UDP_PORT:-514}:514/udp"
       - "0.0.0.0:${SYSLOG_TCP_PORT:-1514}:1514/tcp"
       - "0.0.0.0:${GELF_UDP_PORT:-12201}:12201/udp"
@@ -173,13 +184,14 @@ services:
     container_name: plansb-license-checker
     restart: unless-stopped
     networks:
-      - siem-net
+      - siem-net       # external: API calls to license server
+      - siem-internal  # internal: health checks on containers
     depends_on:
       graylog:
         condition: service_healthy
     volumes:
       - license-data:/data
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # TODO: replace with healthcheck API — needed for container stop/start on license expiry
     environment:
       LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.co.il/api/license/check}"
       CLIENT_ID: "${CLIENT_ID}"

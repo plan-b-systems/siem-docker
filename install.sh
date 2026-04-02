@@ -148,6 +148,18 @@ sed -i '/^GRAYLOG_ROOT_PASSWORD_SHA2=/d' config.env
 echo "GRAYLOG_ROOT_PASSWORD_SHA2=${ROOT_SHA2}" >> config.env
 info "Generated GRAYLOG_ROOT_PASSWORD_SHA2"
 
+# MONGO_PASSWORD (random password for MongoDB authentication)
+if ! grep -q "^MONGO_PASSWORD=" config.env 2>/dev/null || \
+   [[ -z "$(grep "^MONGO_PASSWORD=" config.env | cut -d= -f2-)" ]]; then
+    MONGO_PW=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 32)
+    sed -i '/^MONGO_PASSWORD=/d' config.env
+    echo "MONGO_PASSWORD=${MONGO_PW}" >> config.env
+    info "Generated MONGO_PASSWORD"
+    SECRETS_CHANGED=true
+else
+    info "MONGO_PASSWORD already set – skipping"
+fi
+
 # Reload after appending
 set -a; source config.env; set +a
 

@@ -246,10 +246,12 @@ docker compose --env-file config.env logs graylog | grep ERROR
 ```
 Most common cause: not enough RAM. Reduce `OPENSEARCH_HEAP_SIZE` in config.env and rerun `./reconfigure.sh`.
 
-**Search errors / certificate errors in Graylog UI**
-The JVM truststore may need rebuilding after a cert change. Run:
+**Search errors / certificate errors in Graylog UI** (`SyntaxError: Unexpected token '(', "(certifica"...`)
+
+The CA cert is not in Java's truststore. Run:
 ```bash
-sudo ./reconfigure.sh
+keytool -importcert -keystore /opt/plansb-siem/graylog/cacerts -storepass changeit -alias plansb-ca -file /opt/plansb-siem/certs/ca.crt -noprompt
+cd /opt/plansb-siem && docker compose --env-file config.env restart graylog
 ```
 
 **License checker shows EXPIRED but license was renewed**
@@ -274,6 +276,19 @@ docker exec plansb-opensearch curl -s localhost:9200/_cat/indices?v
 # Check disk
 df -h /mnt/siem-data
 ```
+
+---
+
+## Security Notes
+
+The stack includes these security measures out of the box:
+
+- **MongoDB authentication**: auto-generated password, stored in `config.env`
+- **Network isolation**: MongoDB and OpenSearch run on an internal Docker network with no external port exposure
+- **TLS**: Graylog web UI uses self-signed TLS (HTTPS only)
+- **Index retention**: daily rotation, configurable max days (default 730 = 2 years)
+- **License checker**: reports health to the Plan-B portal hourly
+- **Web UI access**: configurable via `BIND_ADDRESS` in `config.env` to restrict to LAN IP
 
 ---
 

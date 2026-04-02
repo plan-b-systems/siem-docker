@@ -1,13 +1,33 @@
 # Plan-B Systems SIEM – Windows Deployment Guide
 
-Step-by-step instructions for deploying the SIEM stack on a Windows 10/11 machine using WSL2 with Docker installed natively (no Docker Desktop required).
+## Quick Install (Recommended)
+
+Open **PowerShell as Administrator** and run:
+
+```powershell
+irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install.ps1 | iex
+```
+
+The script will:
+1. Install WSL2 + Ubuntu 24.04 + Docker (if not present)
+2. Prompt for client details (name, ID, LAN IP, password, timezone, retention, external data path)
+3. Auto-convert Windows data paths to WSL paths (e.g. `D:\SIEMData` → `/mnt/d/SIEMData`)
+4. Clone the repo, generate TLS certs, start all containers
+5. Configure Graylog inputs, daily index rotation, retention
+6. Set up Windows Firewall rules and port forwarding
+7. Register auto-start scheduled task
+8. Copy CA cert to Desktop for browser import
+
+**Total time: ~10-15 minutes** (mostly Docker image pulls).
+
+After install, access Graylog at `https://<LAN_IP>:9000` with the admin password you chose.
 
 ---
 
 ## Prerequisites
 
-- Windows 10 (21H2+) or Windows 11
-- Minimum 8 GB RAM, 200 GB free disk
+- Windows 10 (21H2+) or Windows 11 (or Windows Server 2019+)
+- Minimum 8 GB RAM, 200 GB free disk (or external disk for 2-year retention)
 - Administrator access
 - Internet access
 - Virtualization enabled in BIOS (check: Task Manager → Performance → CPU → "Virtualization: Enabled")
@@ -392,11 +412,12 @@ memory=6GB
 ```
 Then reduce `OPENSEARCH_HEAP_SIZE` in `config.env` and run `./reconfigure.sh`.
 
-**Certificate errors in Graylog search**
+**Certificate errors in Graylog search** (`SyntaxError: Unexpected token '(', "(certifica"...`)
 
-Run in Ubuntu terminal:
+The CA cert is not in Java's truststore. Run in Ubuntu terminal:
 ```bash
-cd /opt/plansb-siem && sudo ./reconfigure.sh
+keytool -importcert -keystore /opt/plansb-siem/graylog/cacerts -storepass changeit -alias plansb-ca -file /opt/plansb-siem/certs/ca.crt -noprompt
+cd /opt/plansb-siem && docker compose --env-file config.env restart graylog
 ```
 
 **External USB drive not accessible in WSL2**
@@ -406,6 +427,19 @@ Make sure the drive is connected and assigned a letter in Windows. Then in Ubunt
 ls /mnt/e/    # replace 'e' with your drive letter
 ```
 If it doesn't show, restart WSL2: `wsl --shutdown` (from PowerShell), then reopen Ubuntu.
+
+---
+
+## Security Notes
+
+The stack includes these security measures out of the box:
+
+- **MongoDB authentication**: auto-generated password, stored in `config.env`
+- **Network isolation**: MongoDB and OpenSearch run on an internal Docker network with no external port exposure
+- **TLS**: Graylog web UI uses self-signed TLS (HTTPS only)
+- **Index retention**: daily rotation, configurable max days (default 730 = 2 years)
+- **License checker**: reports health to the Plan-B portal hourly
+- **Web UI access**: configurable via `BIND_ADDRESS` in `config.env` to restrict to LAN IP
 
 ---
 

@@ -521,7 +521,8 @@ if [[ -n "$DEFAULT_INDEX_SET_ID" ]]; then
           "index_optimization_max_num_segments": 1,
           "index_optimization_disabled": false,
           "writable":                true,
-          "default":                 true
+          "default":                 true,
+          "use_legacy_rotation":     true
         }' \
         "${GL_API}/system/indices/index_sets/${DEFAULT_INDEX_SET_ID}" && \
     info "Index set retention set to ${RETENTION_DAYS:-730} indices (days)"

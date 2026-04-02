@@ -76,7 +76,29 @@ $heapSize = [math]::Max(1, [math]::Floor($totalRAM / 4))
 $HEAP = "${heapSize}g"
 Write-Ok "Detected ${totalRAM} GB RAM -> OpenSearch heap: ${HEAP}"
 
-$DATA_PATH = Read-Host -Prompt "  External data path [leave empty for Docker volumes]"
+$DATA_PATH_RAW = Read-Host -Prompt "  External data path, e.g. D:\SIEMData [leave empty for Docker volumes]"
+
+# Convert Windows path (D:\SIEMData) to WSL path (/mnt/d/SIEMData)
+$DATA_PATH = ""
+if ($DATA_PATH_RAW) {
+    if ($DATA_PATH_RAW -match '^([A-Za-z]):\\(.*)$') {
+        $driveLetter = $Matches[1].ToLower()
+        $restPath = $Matches[2] -replace '\\', '/'
+        $DATA_PATH = "/mnt/$driveLetter/$restPath"
+    } elseif ($DATA_PATH_RAW -match '^/mnt/') {
+        $DATA_PATH = $DATA_PATH_RAW  # already WSL path
+    } else {
+        $DATA_PATH = $DATA_PATH_RAW
+    }
+
+    # Create the directory on the Windows side if it doesn't exist
+    if ($DATA_PATH_RAW -match '^[A-Za-z]:\\') {
+        if (-not (Test-Path $DATA_PATH_RAW)) {
+            New-Item -ItemType Directory -Path $DATA_PATH_RAW -Force | Out-Null
+            Write-Ok "Created data directory: $DATA_PATH_RAW"
+        }
+    }
+}
 
 Write-Host ""
 Write-Host "  Configuration Summary:" -ForegroundColor White
@@ -87,7 +109,7 @@ Write-Host "  LAN IP:     $HOST_IP"
 Write-Host "  Timezone:   $TIMEZONE"
 Write-Host "  Retention:  $RETENTION_DAYS days"
 Write-Host "  Heap:       $HEAP"
-if ($DATA_PATH) { Write-Host "  Data Path:  $DATA_PATH" }
+if ($DATA_PATH) { Write-Host "  Data Path:  $DATA_PATH_RAW -> $DATA_PATH (WSL)" }
 Write-Host ""
 
 $confirm = Read-Host -Prompt "  Proceed with deployment? [y/n]"

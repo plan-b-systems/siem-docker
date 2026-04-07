@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
 import { osQuery, getIndexPattern } from '@/lib/opensearch'
 import { config } from '@/lib/config'
+import { existsSync, readFileSync } from 'fs'
 
 export async function GET() {
-  const fs = require('fs')
   const health: Record<string, unknown> = {
     client_id: config.clientId,
     client_name: config.clientName,
@@ -76,8 +76,8 @@ export async function GET() {
   // Container statuses from license checker state
   try {
     const stateFile = '/data/license_state.json'
-    if (fs.existsSync(stateFile)) {
-      const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
+    if (existsSync(stateFile)) {
+      const state = JSON.parse(readFileSync(stateFile, 'utf8'))
       health.license_status = state.status
       health.license_last_check = state.last_check
       health.services_stopped = state.services_stopped
@@ -87,8 +87,8 @@ export async function GET() {
   // AI tier
   try {
     const aiFile = process.env.AI_KEY_FILE || '/data/ai_key.json'
-    if (fs.existsSync(aiFile)) {
-      const ai = JSON.parse(fs.readFileSync(aiFile, 'utf8'))
+    if (existsSync(aiFile)) {
+      const ai = JSON.parse(readFileSync(aiFile, 'utf8'))
       health.ai_tier = ai.ai_tier
       health.ai_daily_budget = ai.daily_budget
     }

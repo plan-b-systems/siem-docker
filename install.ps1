@@ -5,15 +5,12 @@
 $ProgressPreference = "SilentlyContinue"
 
 # Admin check
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
     Write-Host "ERROR: Run this as Administrator!" -ForegroundColor Red
     Read-Host "Press Enter to exit"
     return
 }
-
-$installDir = "C:\PlanB-SIEM"
-$zipUrl = "https://github.com/plan-b-systems/siem-docker/archive/refs/heads/v2.zip"
-$zipFile = "$installDir\siem-docker.zip"
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
@@ -21,48 +18,67 @@ Write-Host "  Plan-B Systems SIEM v2 - Installer" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
+$installDir = "C:\PlanB-SIEM"
+$tempDir = "$env:TEMP\plansb-install-$(Get-Random)"
+$zipUrl = "https://github.com/plan-b-systems/siem-docker/archive/refs/heads/v2.zip"
+$zipFile = "$tempDir\siem-docker.zip"
+
 try {
-    # Clean previous install if exists
-    if (Test-Path "$installDir\siem-docker-v2") {
-        Write-Host "Removing previous v2 installation..." -ForegroundColor Yellow
-        Remove-Item -Recurse -Force "$installDir\siem-docker-v2" -ErrorAction SilentlyContinue
-    }
-
-    # Create install directory
-    if (-not (Test-Path $installDir)) {
-        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-    }
-
-    # Download
+    # Download to temp
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
     Write-Host "Downloading siem-docker v2 from GitHub..." -ForegroundColor Yellow
     Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
+    Write-Host "  [OK] Downloaded" -ForegroundColor Green
 
-    # Extract
+    # Extract to temp
     Write-Host "Extracting..." -ForegroundColor Yellow
-    Expand-Archive -Path $zipFile -DestinationPath $installDir -Force
+    Expand-Archive -Path $zipFile -DestinationPath $tempDir -Force
     Remove-Item $zipFile -Force
+    Write-Host "  [OK] Extracted" -ForegroundColor Green
 
-    # The archive extracts to siem-docker-v2
-    $deployScript = "$installDir\siem-docker-v2\deploy-windows.ps1"
+    # Clean old install
+    if (Test-Path $installDir) {
+        Write-Host "Cleaning previous installation..." -ForegroundColor Yellow
+        # Kill any processes holding locks
+        Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($installDir) } | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+        Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+        if (Test-Path $installDir) {
+            Write-Host "  [WARN] Old install partially locked, continuing anyway..." -ForegroundColor Yellow
+        } else {
+            Write-Host "  [OK] Old install removed" -ForegroundColor Green
+        }
+    }
 
+    # Move extracted files to install directory
+    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+    Copy-Item -Recurse -Force "$tempDir\siem-docker-v2\*" "$installDir\" -ErrorAction Stop
+    Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
+    Write-Host "  [OK] Installed to $installDir" -ForegroundColor Green
+
+    # Verify deploy script exists
+    $deployScript = "$installDir\deploy-windows.ps1"
     if (-not (Test-Path $deployScript)) {
-        Write-Host "ERROR: deploy-windows.ps1 not found after extraction!" -ForegroundColor Red
-        Write-Host "Contents of ${installDir}:" -ForegroundColor Yellow
-        Get-ChildItem $installDir -Recurse -Depth 1 | ForEach-Object { Write-Host "  $_" }
+        Write-Host "ERROR: deploy-windows.ps1 not found!" -ForegroundColor Red
+        Write-Host "Contents:" -ForegroundColor Yellow
+        Get-ChildItem $installDir | ForEach-Object { Write-Host "  $($_.Name)" }
         Read-Host "Press Enter to exit"
         return
     }
 
+    Write-Host ""
     Write-Host "Starting deployment..." -ForegroundColor Green
     Write-Host ""
 
-    # Run the deployment script
-    Set-Location "$installDir\siem-docker-v2"
+    Set-Location $installDir
     & $deployScript
 }
 catch {
     Write-Host ""
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "Stack: $($_.ScriptStackTrace)" -ForegroundColor DarkGray
+    Write-Host ""
     Read-Host "Press Enter to exit"
+}
+finally {
+    Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
 }

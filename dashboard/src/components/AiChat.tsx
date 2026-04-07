@@ -95,7 +95,7 @@ export default function AiChat() {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full bg-blue-600 hover:bg-blue-500 text-white shadow-lg flex items-center justify-center transition-transform hover:scale-105"
+        className="fixed bottom-6 right-80 z-50 w-14 h-14 rounded-full bg-blue-600 hover:bg-blue-500 text-white shadow-lg flex items-center justify-center transition-transform hover:scale-105"
         title="AI Assistant"
       >
         <Bot size={24} />
@@ -104,7 +104,7 @@ export default function AiChat() {
   }
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 w-[480px] h-[600px] bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+    <div className="fixed bottom-6 right-80 z-50 w-[480px] h-[600px] bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900">
         <div className="flex items-center gap-2">

@@ -157,13 +157,18 @@ info "OpenSearch image pulled"
 if ! grep -q "^DASHBOARD_PASSWORD_HASH=" config.env 2>/dev/null || \
    [[ -z "$(grep "^DASHBOARD_PASSWORD_HASH=" config.env | cut -d= -f2-)" ]]; then
     info "Generating dashboard password hash..."
-    # Extract raw password (strip surrounding quotes if present)
     RAW_PW=$(grep "^DASHBOARD_PASSWORD=" config.env | sed "s/^DASHBOARD_PASSWORD=//" | sed "s/^'//;s/'$//")
-    # Use a fresh node container with bcryptjs installed
-    PW_HASH=$(docker run --rm node:22-alpine sh -c "
-        npm install --silent bcryptjs 2>/dev/null
-        node -e \"console.log(require('bcryptjs').hashSync('${RAW_PW}', 12))\"
-    " 2>/dev/null | tail -1)
+
+    # Write a temp JS file to avoid shell escaping issues
+    cat > /tmp/plansb-genhash.js << 'JSEOF'
+const bcrypt = require('bcryptjs');
+const pw = process.argv[2] || 'changeme';
+console.log(bcrypt.hashSync(pw, 12));
+JSEOF
+
+    PW_HASH=$(docker run --rm -v /tmp/plansb-genhash.js:/tmp/genhash.js -w /tmp \
+        node:22-alpine sh -c "npm init -y >/dev/null 2>&1 && npm install bcryptjs >/dev/null 2>&1 && node /tmp/genhash.js '${RAW_PW}'" 2>/dev/null | tail -1)
+    rm -f /tmp/plansb-genhash.js
 
     if [[ -n "$PW_HASH" && "$PW_HASH" == \$2* ]]; then
         sed -i '/^#\s*DASHBOARD_PASSWORD_HASH=/d' config.env

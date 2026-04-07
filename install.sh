@@ -356,9 +356,24 @@ docker compose --env-file config.env pull mongodb opensearch graylog
 info "Images pulled"
 
 # ════════════════════════════════════════════════════════════
-# 10. Start core services (without license-checker first)
+# 10. Clean stale Docker state + start core services
 # ════════════════════════════════════════════════════════════
 step "Starting SIEM services"
+
+# Remove leftover containers and volumes from a prior install
+# This prevents stale MongoDB credentials baked into old volumes
+# from conflicting with freshly generated secrets in config.env
+if docker ps -a --format '{{.Names}}' | grep -q "^plansb-"; then
+    info "Removing stale containers from prior install …"
+    docker compose --env-file config.env down -v 2>/dev/null || true
+    for c in plansb-graylog plansb-mongodb plansb-opensearch plansb-license-checker; do
+        docker rm -f "$c" 2>/dev/null || true
+    done
+fi
+# Remove orphan volumes (e.g. if containers were already removed but volumes remain)
+docker volume ls -q --filter name=plansb-siem_ | while read -r vol; do
+    docker volume rm "$vol" 2>/dev/null && info "Removed stale volume: $vol" || true
+done
 
 docker compose --env-file config.env up -d mongodb opensearch
 info "MongoDB and OpenSearch starting …"

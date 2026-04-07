@@ -280,6 +280,22 @@ fi
 if [ -d /opt/plansb-siem/.git ]; then
     echo "Repo exists, pulling latest..."
     cd /opt/plansb-siem && git pull origin main 2>&1 || true
+
+    # Clean generated artifacts from prior install to prevent stale
+    # secrets/certs being reused with fresh Docker volumes
+    echo "Cleaning previous deployment artifacts..."
+    rm -f config.env 2>/dev/null || true
+    rm -f certs/graylog.crt certs/graylog.key certs/graylog.csr certs/ca.crt certs/ca.key certs/ca.srl 2>/dev/null || true
+    rm -f graylog/cacerts graylog/graylog.conf 2>/dev/null || true
+    rm -f docker-compose.override.yml 2>/dev/null || true
+
+    # Clean stale Docker state (containers + volumes from prior install)
+    echo "Removing stale Docker containers and volumes..."
+    docker compose --env-file config.env.template down -v 2>/dev/null || true
+    for c in plansb-graylog plansb-mongodb plansb-opensearch plansb-license-checker; do
+        docker rm -f \$c 2>/dev/null || true
+    done
+    docker volume ls -q --filter name=plansb-siem_ | xargs -r docker volume rm 2>/dev/null || true
 else
     echo "Cloning repository..."
     git clone https://github.com/plan-b-systems/siem-docker.git /opt/plansb-siem 2>&1

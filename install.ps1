@@ -52,7 +52,13 @@ try {
 
     # Move extracted files to install directory
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-    Copy-Item -Recurse -Force "$tempDir\siem-docker-v2\*" "$installDir\" -ErrorAction Stop
+    # Find the extracted folder (GitHub names it siem-docker-2 or siem-docker-v2)
+    $extractedDir = Get-ChildItem -Path $tempDir -Directory | Select-Object -First 1
+    if (-not $extractedDir) {
+        throw "No folder found after extraction in $tempDir"
+    }
+    Write-Host "  Found: $($extractedDir.Name)" -ForegroundColor Gray
+    Copy-Item -Recurse -Force "$($extractedDir.FullName)\*" "$installDir\" -ErrorAction Stop
     Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
     Write-Host "  [OK] Installed to $installDir" -ForegroundColor Green
 

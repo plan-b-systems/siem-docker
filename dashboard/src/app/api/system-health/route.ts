@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server'
 import { osQuery, getIndexPattern } from '@/lib/opensearch'
 import { config } from '@/lib/config'
-import { existsSync, readFileSync } from 'fs'
+
+export const dynamic = 'force-dynamic'
 
 export async function GET() {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { existsSync, readFileSync } = require('node:fs')
   const health: Record<string, unknown> = {
     client_id: config.clientId,
     client_name: config.clientName,

@@ -316,7 +316,7 @@ sed -i "s|^CLIENT_NAME=.*|CLIENT_NAME=$CLIENT_NAME|" config.env
 sed -i "s|^CLIENT_ID=.*|CLIENT_ID=$CLIENT_ID|" config.env
 sed -i "s|^GRAYLOG_HOSTNAME=.*|GRAYLOG_HOSTNAME=$HOST_IP|" config.env
 sed -i "s|^HOST_IP=.*|HOST_IP=$HOST_IP|" config.env
-sed -i "s|^GRAYLOG_ADMIN_PASSWORD=.*|GRAYLOG_ADMIN_PASSWORD=$ADMIN_PASSWORD|" config.env
+sed -i "s|^GRAYLOG_ADMIN_PASSWORD=.*|GRAYLOG_ADMIN_PASSWORD='$ADMIN_PASSWORD'|" config.env
 sed -i "s|^TIMEZONE=.*|TIMEZONE=$TIMEZONE|" config.env
 sed -i "s|^RETENTION_DAYS=.*|RETENTION_DAYS=$RETENTION_DAYS|" config.env
 sed -i "s|^OPENSEARCH_HEAP_SIZE=.*|OPENSEARCH_HEAP_SIZE=$HEAP|" config.env

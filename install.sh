@@ -142,7 +142,7 @@ else
 fi
 
 # GRAYLOG_ROOT_PASSWORD_SHA2 (SHA-256 of admin password)
-ROOT_SHA2=$(echo -n "${GRAYLOG_ADMIN_PASSWORD}" | sha256sum | awk '{print $1}')
+ROOT_SHA2=$(printf '%s' "${GRAYLOG_ADMIN_PASSWORD}" | sha256sum | awk '{print $1}')
 sed -i '/^#\s*GRAYLOG_ROOT_PASSWORD_SHA2=/d' config.env
 sed -i '/^GRAYLOG_ROOT_PASSWORD_SHA2=/d' config.env
 echo "GRAYLOG_ROOT_PASSWORD_SHA2=${ROOT_SHA2}" >> config.env

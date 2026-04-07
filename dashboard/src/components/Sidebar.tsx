@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
+  HeartPulse,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useLanguage } from './LanguageProvider'
@@ -23,6 +24,7 @@ const navItems: { href: string; labelKey: TranslationKey; icon: typeof LayoutDas
   { href: '/threats', labelKey: 'nav.threats', icon: ShieldAlert },
   { href: '/forensics', labelKey: 'nav.forensics', icon: Search },
   { href: '/sources', labelKey: 'nav.sources', icon: Server },
+  { href: '/health', labelKey: 'nav.health' as TranslationKey, icon: HeartPulse },
 ]
 
 export default function Sidebar() {

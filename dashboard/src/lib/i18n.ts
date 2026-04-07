@@ -6,6 +6,7 @@ export const translations = {
   'nav.threats': { he: 'איומים', en: 'Threats' },
   'nav.forensics': { he: 'חקירות', en: 'Forensics' },
   'nav.sources': { he: 'מקורות', en: 'Sources' },
+  'nav.health': { he: 'בריאות המערכת', en: 'System Health' },
   'nav.settings': { he: 'הגדרות', en: 'Settings' },
   'nav.logout': { he: 'התנתק', en: 'Logout' },
   'nav.collapse': { he: 'כווץ', en: 'Collapse' },

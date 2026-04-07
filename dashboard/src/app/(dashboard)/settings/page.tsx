@@ -3,14 +3,19 @@
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useLanguage } from '@/components/LanguageProvider'
-import { Settings, Globe, Clock, Database, Shield, CheckCircle, XCircle } from 'lucide-react'
+import { Settings, Globe, Clock, Database, Shield, CheckCircle, XCircle, Cpu, Zap } from 'lucide-react'
 
 export default function SettingsPage() {
   const { t, locale, setLocale } = useLanguage()
   const [settings, setSettings] = useState<Record<string, string | number>>({})
+  const [license, setLicense] = useState<Record<string, unknown> | null>(null)
   const [osStatus, setOsStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking')
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/license').then(r => r.ok ? r.json() : null).then(d => setLicense(d)).catch(() => {})
+  }, [])
 
   useEffect(() => {
     async function load() {
@@ -183,6 +188,45 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* License Status */}
+      {license && (
+        <Card className="bg-slate-900 border-slate-800 lg:col-span-2">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-slate-300 flex items-center gap-2">
+              <Zap size={16} /> {locale === 'he' ? 'סטטוס רישיון' : 'License Status'}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div>
+                <span className="text-slate-500">{locale === 'he' ? 'סטטוס' : 'Status'}</span>
+                <div className="mt-1 flex items-center gap-2">
+                  {license.active ? (
+                    <><CheckCircle size={16} className="text-green-500" /><span className="text-green-400">{license.status as string}</span></>
+                  ) : (
+                    <><XCircle size={16} className="text-red-500" /><span className="text-red-400">{license.status as string}</span></>
+                  )}
+                </div>
+              </div>
+              <div>
+                <span className="text-slate-500">{locale === 'he' ? 'בדיקה אחרונה' : 'Last Check'}</span>
+                <div className="mt-1 text-white text-xs">
+                  {license.last_check ? new Date(license.last_check as string).toLocaleString() : '—'}
+                </div>
+              </div>
+              <div>
+                <span className="text-slate-500 flex items-center gap-1"><Cpu size={12} /> {locale === 'he' ? 'רמת AI' : 'AI Tier'}</span>
+                <div className="mt-1 text-white font-medium">{(license.ai_tier as string) || 'NONE'}</div>
+              </div>
+              <div>
+                <span className="text-slate-500">{locale === 'he' ? 'תקציב יומי AI' : 'AI Daily Budget'}</span>
+                <div className="mt-1 text-white font-medium">{(license.ai_daily_budget as number) || 0} {locale === 'he' ? 'שאילתות' : 'queries'}</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Save */}
       <div className="flex items-center gap-4">

@@ -293,3 +293,36 @@ On-Prem                                    Cloud (siemsys)
 | 11 | Dark theme, Plan-B branded | 2026-04-07 | Approved |
 | 12 | One-liner deployment | 2026-04-07 | Approved |
 | 13 | Encrypted on-prem↔cloud API | 2026-04-07 | Approved |
+| 14 | API key rotation process | 2026-04-07 | Approved |
+
+---
+
+## 14. Anthropic API Key Rotation
+
+**Decision:** Single organizational API key, rotated manually via Anthropic console, propagated automatically to all on-prem clients.
+
+**Why:**
+- Anthropic doesn't offer per-client API keys or an API for key management
+- One key per organization is the only option
+- On-prem clients must never store a permanent key — they receive it encrypted daily
+
+**Rotation process:**
+1. Create new key on console.anthropic.com
+2. Update `ANTHROPIC_API_KEY` in Vercel env vars (siemsys production + dev)
+3. All on-prem clients automatically get the new encrypted key on next daily license check (within 24h)
+4. After 48h (all clients rotated), delete the old key on console.anthropic.com
+
+**Automatic propagation:** The license check API reads `ANTHROPIC_API_KEY` from its environment on every request. When the env var changes (Vercel redeploy), all subsequent license checks return the new key encrypted. No on-prem changes needed.
+
+**Grace period:** If a client misses the daily check (network down), the old key continues working until step 4 (old key deletion). The 7-day grace period in the license checker covers temporary outages.
+
+**Per-client controls (all from siemsys admin, no on-prem access needed):**
+- **Enable/disable AI:** Set `ai_tier` to NONE → key file deleted on next check
+- **Change budget:** Set `ai_tier` (STARTER=50/day, PRO=200/day, UNLIMITED=9999/day)
+- **Kill switch:** Revoke `client_secret` → license check fails auth → AI stops immediately
+- **Usage monitoring:** AiUsage table tracks queries per client per month
+
+**Cannot automate (Anthropic limitation):**
+- Key creation (manual on console.anthropic.com)
+- Per-key spend limits (workspace-level only)
+- Per-key usage tracking (all keys share one dashboard)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Plan-B Systems SIEM – Health Check
+# Plan-B Systems SIEM v2 – Health Check
 # Verifies all components are running and healthy
 # Usage: ./health-check.sh [--quiet] [--fix]
 # ============================================================
@@ -21,7 +21,6 @@ for arg in "$@"; do
     esac
 done
 
-# Load SIEM path
 SIEM_DIR="/opt/plansb-siem"
 if [[ -f /etc/plansb-siem.conf ]]; then
     source /etc/plansb-siem.conf
@@ -31,7 +30,7 @@ pass() { $QUIET || echo -e "  ${GREEN}PASS${NC}  $*"; }
 fail() { echo -e "  ${RED}FAIL${NC}  $*"; ERRORS=$((ERRORS+1)); }
 warn_() { echo -e "  ${YELLOW}WARN${NC}  $*"; WARNINGS=$((WARNINGS+1)); }
 
-$QUIET || echo -e "${BOLD}Plan-B Systems SIEM – Health Check${NC}"
+$QUIET || echo -e "${BOLD}Plan-B Systems SIEM v2 – Health Check${NC}"
 $QUIET || echo -e "$(date '+%Y-%m-%d %H:%M:%S')\n"
 
 # ── 1. Docker daemon ──
@@ -41,19 +40,15 @@ if docker info &>/dev/null; then
 else
     fail "Docker daemon not running"
     if $FIX; then
-        echo "  Attempting to start Docker..."
         dockerd &>/var/log/dockerd.log &
         sleep 5
-        if docker info &>/dev/null; then
-            pass "Docker daemon started (fixed)"
-            ERRORS=$((ERRORS-1))
-        fi
+        docker info &>/dev/null && { pass "Docker started (fixed)"; ERRORS=$((ERRORS-1)); }
     fi
 fi
 
 # ── 2. Containers running ──
 $QUIET || echo -e "\n${BOLD}Containers${NC}"
-CONTAINERS=(plansb-mongodb plansb-opensearch plansb-graylog plansb-license-checker)
+CONTAINERS=(plansb-opensearch plansb-syslog plansb-dashboard plansb-license-checker)
 for cname in "${CONTAINERS[@]}"; do
     STATUS=$(docker inspect --format='{{.State.Status}}' "$cname" 2>/dev/null || echo "not found")
     HEALTH=$(docker inspect --format='{{.State.Health.Status}}' "$cname" 2>/dev/null || echo "none")
@@ -65,33 +60,26 @@ for cname in "${CONTAINERS[@]}"; do
     else
         fail "${cname}: ${STATUS}"
         if $FIX; then
-            echo "  Attempting to start ${cname}..."
             docker start "$cname" &>/dev/null
             sleep 3
             NEW_STATUS=$(docker inspect --format='{{.State.Status}}' "$cname" 2>/dev/null || echo "failed")
-            if [[ "$NEW_STATUS" == "running" ]]; then
-                pass "${cname}: started (fixed)"
-                ERRORS=$((ERRORS-1))
-            fi
+            [[ "$NEW_STATUS" == "running" ]] && { pass "${cname}: started (fixed)"; ERRORS=$((ERRORS-1)); }
         fi
     fi
 done
 
-# ── 3. Graylog API ──
-$QUIET || echo -e "\n${BOLD}Graylog API${NC}"
-
-# Load port from config
-GL_PORT=9000
+# ── 3. Dashboard ──
+$QUIET || echo -e "\n${BOLD}Dashboard${NC}"
+DASH_PORT=3000
 if [[ -f "${SIEM_DIR}/config.env" ]]; then
-    GL_PORT=$(grep "^GRAYLOG_WEB_PORT=" "${SIEM_DIR}/config.env" 2>/dev/null | cut -d= -f2 || echo "9000")
-    GL_PORT=${GL_PORT:-9000}
+    DASH_PORT=$(grep "^DASHBOARD_PORT=" "${SIEM_DIR}/config.env" 2>/dev/null | cut -d= -f2 || echo "3000")
+    DASH_PORT=${DASH_PORT:-3000}
 fi
-
-API_RESP=$(curl -sk -o /dev/null -w "%{http_code}" "https://localhost:${GL_PORT}/api/" --connect-timeout 5 2>/dev/null)
-if [[ "$API_RESP" =~ ^(200|401)$ ]]; then
-    pass "Graylog API responding (HTTP ${API_RESP})"
+DASH_RESP=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${DASH_PORT}/api/health" --connect-timeout 5 2>/dev/null)
+if [[ "$DASH_RESP" == "200" ]]; then
+    pass "Dashboard API responding"
 else
-    fail "Graylog API not responding (HTTP ${API_RESP})"
+    fail "Dashboard API not responding (HTTP ${DASH_RESP})"
 fi
 
 # ── 4. OpenSearch cluster ──
@@ -105,26 +93,23 @@ else
     fail "OpenSearch cluster: ${OS_HEALTH}"
 fi
 
-# ── 5. MongoDB ──
-$QUIET || echo -e "\n${BOLD}MongoDB${NC}"
-MONGO_OK=$(docker exec plansb-mongodb mongosh --quiet --eval "db.adminCommand('ping').ok" 2>/dev/null || echo "0")
-if [[ "$MONGO_OK" == "1" ]]; then
-    pass "MongoDB responding"
+# ── 5. Syslog receiver ──
+$QUIET || echo -e "\n${BOLD}Syslog Receiver${NC}"
+SYSLOG_TCP=$(echo "" | timeout 3 bash -c "cat > /dev/tcp/127.0.0.1/1514" 2>/dev/null && echo "ok" || echo "fail")
+if [[ "$SYSLOG_TCP" == "ok" ]]; then
+    pass "Syslog TCP:1514 accepting connections"
 else
-    fail "MongoDB not responding"
+    fail "Syslog TCP:1514 not responding"
 fi
 
 # ── 6. Port bindings ──
 $QUIET || echo -e "\n${BOLD}Port Bindings${NC}"
 declare -A PORT_CHECK=(
-    ["9000/tcp"]="Graylog Web"
+    ["3000/tcp"]="Dashboard"
     ["1514/tcp"]="Syslog TCP"
-    ["12202/tcp"]="GELF TCP"
 )
-
 for port_proto in "${!PORT_CHECK[@]}"; do
     PORT=$(echo "$port_proto" | cut -d/ -f1)
-    PROTO=$(echo "$port_proto" | cut -d/ -f2)
     BOUND=$(ss -tlnp 2>/dev/null | grep ":${PORT} " || echo "")
     if [[ -n "$BOUND" ]]; then
         pass "${PORT_CHECK[$port_proto]} (${port_proto}): listening"
@@ -133,12 +118,9 @@ for port_proto in "${!PORT_CHECK[@]}"; do
     fi
 done
 
-# UDP ports
 declare -A UDP_CHECK=(
     ["514/udp"]="Syslog UDP"
-    ["12201/udp"]="GELF UDP"
 )
-
 for port_proto in "${!UDP_CHECK[@]}"; do
     PORT=$(echo "$port_proto" | cut -d/ -f1)
     BOUND=$(ss -ulnp 2>/dev/null | grep ":${PORT} " || echo "")

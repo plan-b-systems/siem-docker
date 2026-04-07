@@ -2,6 +2,11 @@
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
+  experimental: {
+    outputFileTracingIncludes: {
+      '/api/**': ['./node_modules/bcryptjs/**', './node_modules/@anthropic-ai/**'],
+    },
+  },
   async headers() {
     return [
       {

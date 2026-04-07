@@ -130,10 +130,12 @@ services:
       TIMEZONE: "${TIMEZONE:-Asia/Jerusalem}"
       RETENTION_DAYS: "${RETENTION_DAYS:-730}"
       LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.systems/api/license/check}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      AI_KEY_FILE: "/data/ai_key.json"
       HOSTNAME: "0.0.0.0"
       NODE_ENV: "production"
       TZ: "${TIMEZONE:-Asia/Jerusalem}"
+    volumes:
+      - license-data:/data:ro
     ports:
       - "${BIND_ADDRESS:-0.0.0.0}:${DASHBOARD_PORT:-3000}:3000"
     healthcheck:
@@ -173,12 +175,14 @@ services:
     environment:
       LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.systems/api/license/check}"
       CLIENT_ID: "${CLIENT_ID}"
+      CLIENT_SECRET: "${CLIENT_SECRET:-}"
       GRACE_PERIOD_DAYS: "${GRACE_PERIOD_DAYS:-7}"
       SYSLOG_CONTAINER: "plansb-syslog"
       OPENSEARCH_CONTAINER: "plansb-opensearch"
       DASHBOARD_CONTAINER: "plansb-dashboard"
       STATE_FILE: "/data/license_state.json"
       LOG_FILE: "/data/license_checker.log"
+      AI_KEY_FILE: "/data/ai_key.json"
       TZ: "${TIMEZONE:-Asia/Jerusalem}"
     logging:
       driver: "json-file"

@@ -101,9 +101,30 @@ async function getLogCount(): Promise<number> {
 // In-memory conversation store (per-container, resets on restart)
 const sessions = new Map<string, { role: string; content: string; model?: string }[]>()
 
+function getAiKey(): { apiKey: string; dailyBudget: number; tier: string } | null {
+  // Try file first (delivered by license checker), then env var fallback
+  const keyFile = process.env.AI_KEY_FILE || '/data/ai_key.json'
+  try {
+    const fs = require('fs')
+    if (fs.existsSync(keyFile)) {
+      const data = JSON.parse(fs.readFileSync(keyFile, 'utf8'))
+      if (data.api_key) {
+        return { apiKey: data.api_key, dailyBudget: data.daily_budget || 0, tier: data.ai_tier || 'UNKNOWN' }
+      }
+    }
+  } catch { /* file not found or invalid */ }
+
+  // Fallback to env var (for dev/testing)
+  const envKey = process.env.ANTHROPIC_API_KEY
+  if (envKey) {
+    return { apiKey: envKey, dailyBudget: 9999, tier: 'DEV' }
+  }
+  return null
+}
+
 export async function POST(request: NextRequest) {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) {
+  const aiConfig = getAiKey()
+  if (!aiConfig) {
     return NextResponse.json({ error: 'AI not configured. Contact Plan-B Systems to enable AI tier.' }, { status: 503 })
   }
 
@@ -114,7 +135,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Message required (max 2000 chars)' }, { status: 400 })
   }
 
-  const anthropic = new Anthropic({ apiKey })
+  const anthropic = new Anthropic({ apiKey: aiConfig.apiKey })
   const sid = session_id || crypto.randomUUID()
 
   // Load or create session

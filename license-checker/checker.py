@@ -40,9 +40,11 @@ from apscheduler.triggers.interval import IntervalTrigger
 LICENSE_API_URL      = os.environ.get("LICENSE_API_URL",   "https://siemsys.plan-b.co.il/api/license/check")
 HEALTH_API_URL       = os.environ.get("HEALTH_API_URL",    "https://siemsys.plan-b.co.il/api/health-report")
 CLIENT_ID            = os.environ.get("CLIENT_ID",         "")
+CLIENT_SECRET        = os.environ.get("CLIENT_SECRET",     "")
 GRACE_PERIOD_DAYS    = int(os.environ.get("GRACE_PERIOD_DAYS", "7"))
 STATE_FILE           = Path(os.environ.get("STATE_FILE",   "/data/license_state.json"))
 LOG_FILE             = Path(os.environ.get("LOG_FILE",     "/data/license_checker.log"))
+AI_KEY_FILE          = Path(os.environ.get("AI_KEY_FILE",  "/data/ai_key.json"))
 TZ_NAME              = os.environ.get("TZ",                "UTC")
 SYSLOG_CONTAINER     = os.environ.get("SYSLOG_CONTAINER",     "plansb-syslog")
 OPENSEARCH_CONTAINER = os.environ.get("OPENSEARCH_CONTAINER", "plansb-opensearch")
@@ -179,19 +181,110 @@ def start_services() -> bool:
 
 # ── License API ──────────────────────────────────────────────────────────
 
+def decrypt_ai_key(encrypted: str, secret: str) -> str | None:
+    """Decrypt AES-256-CBC encrypted API key using client secret."""
+    try:
+        import hashlib
+        from binascii import unhexlify
+        parts = encrypted.split(":")
+        if len(parts) != 2:
+            return None
+        iv = unhexlify(parts[0])
+        ct = unhexlify(parts[1])
+        key = hashlib.sha256(secret.encode()).digest()
+        # Use PyCryptodome if available, else try openssl via subprocess
+        try:
+            from Crypto.Cipher import AES
+            cipher = AES.new(key, AES.MODE_CBC, iv)
+            pt = cipher.decrypt(ct)
+            # Remove PKCS7 padding
+            pad_len = pt[-1]
+            return pt[:-pad_len].decode('utf-8')
+        except ImportError:
+            # Fallback: use openssl command
+            import subprocess
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.bin') as f:
+                f.write(iv + ct)
+                tmp = f.name
+            result = subprocess.run(
+                ['openssl', 'enc', '-aes-256-cbc', '-d', '-K', key.hex(), '-iv', parts[0], '-in', tmp],
+                capture_output=True
+            )
+            os.unlink(tmp)
+            if result.returncode == 0:
+                return result.stdout.decode('utf-8')
+            return None
+    except Exception as exc:
+        log.error("Failed to decrypt AI key: %s", exc)
+        return None
+
+
+def save_ai_key(api_key: str, daily_budget: int, ai_tier: str) -> None:
+    """Save decrypted AI key to shared volume for dashboard to read."""
+    try:
+        ai_data = {
+            "api_key": api_key,
+            "daily_budget": daily_budget,
+            "ai_tier": ai_tier,
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        AI_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(AI_KEY_FILE, "w", encoding="utf-8") as f:
+            json.dump(ai_data, f, indent=2)
+        log.info("AI key saved (tier=%s, budget=%d/day)", ai_tier, daily_budget)
+    except Exception as exc:
+        log.error("Failed to save AI key: %s", exc)
+
+
+def remove_ai_key() -> None:
+    """Remove AI key file when license is inactive or AI tier is NONE."""
+    try:
+        if AI_KEY_FILE.exists():
+            AI_KEY_FILE.unlink()
+            log.info("AI key removed (license inactive or no AI tier)")
+    except Exception as exc:
+        log.error("Failed to remove AI key: %s", exc)
+
+
 def call_license_api() -> tuple[bool, bool | None, str | None]:
     """
     Returns (api_reachable, active, expires_str).
     api_reachable=False means network/timeout error.
+    Also handles AI key delivery when CLIENT_SECRET is set.
     """
     url = f"{LICENSE_API_URL}?client_id={CLIENT_ID}"
+    headers = {}
+    if CLIENT_SECRET:
+        headers["Authorization"] = f"Bearer {CLIENT_SECRET}"
+
     try:
-        resp = requests.get(url, timeout=30, verify=True)
+        resp = requests.get(url, headers=headers, timeout=30, verify=True)
         resp.raise_for_status()
         data = resp.json()
         active  = bool(data.get("active", False))
         expires = data.get("expires", "unknown")
-        log.info("API response: active=%s  expires=%s", active, expires)
+        log.info("API response: active=%s  expires=%s  authenticated=%s",
+                 active, expires, data.get("authenticated", False))
+
+        # Handle AI key delivery
+        if active and CLIENT_SECRET and data.get("authenticated"):
+            ai_key_encrypted = data.get("ai_key_encrypted")
+            if ai_key_encrypted:
+                decrypted = decrypt_ai_key(ai_key_encrypted, CLIENT_SECRET)
+                if decrypted:
+                    save_ai_key(
+                        decrypted,
+                        data.get("ai_daily_budget", 0),
+                        data.get("ai_tier", "NONE"),
+                    )
+                else:
+                    log.warning("Failed to decrypt AI key")
+            elif data.get("ai_tier", "NONE") == "NONE":
+                remove_ai_key()
+        elif not active:
+            remove_ai_key()
+
         return True, active, expires
     except requests.exceptions.SSLError as exc:
         log.error("SSL error contacting license API: %s", exc)

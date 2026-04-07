@@ -22,8 +22,8 @@ function Write-Err   { param($msg) Write-Host "  [ERROR] $msg" -ForegroundColor 
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "  Plan-B Systems SIEM - Windows Deployment" -ForegroundColor Cyan
-Write-Host "  Graylog 7.2 + OpenSearch 2.x + MongoDB 7.0" -ForegroundColor Cyan
+Write-Host "  Plan-B Systems SIEM v2 - Windows Deployment" -ForegroundColor Cyan
+Write-Host "  OpenSearch 2.x + Syslog Receiver + Dashboard" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -57,10 +57,10 @@ $defaultIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.Interface
 $HOST_IP = Read-Host -Prompt "  Machine LAN IP [$defaultIP]"
 if ([string]::IsNullOrWhiteSpace($HOST_IP)) { $HOST_IP = $defaultIP }
 
-$ADMIN_PASSWORD = Read-Host -Prompt "  Graylog admin password [min 8 chars]"
+$ADMIN_PASSWORD = Read-Host -Prompt "  Dashboard admin password [min 8 chars]"
 while ([string]::IsNullOrWhiteSpace($ADMIN_PASSWORD) -or $ADMIN_PASSWORD.Length -lt 8) {
     Write-Warn "Password must be at least 8 characters"
-    $ADMIN_PASSWORD = Read-Host -Prompt "  Graylog admin password"
+    $ADMIN_PASSWORD = Read-Host -Prompt "  Dashboard admin password"
 }
 
 # Optional settings with defaults
@@ -314,9 +314,8 @@ cp config.env.template config.env
 
 sed -i "s|^CLIENT_NAME=.*|CLIENT_NAME=$CLIENT_NAME|" config.env
 sed -i "s|^CLIENT_ID=.*|CLIENT_ID=$CLIENT_ID|" config.env
-sed -i "s|^GRAYLOG_HOSTNAME=.*|GRAYLOG_HOSTNAME=$HOST_IP|" config.env
 sed -i "s|^HOST_IP=.*|HOST_IP=$HOST_IP|" config.env
-sed -i "s|^GRAYLOG_ADMIN_PASSWORD=.*|GRAYLOG_ADMIN_PASSWORD='$ADMIN_PASSWORD'|" config.env
+sed -i "s|^DASHBOARD_PASSWORD=.*|DASHBOARD_PASSWORD='$ADMIN_PASSWORD'|" config.env
 sed -i "s|^TIMEZONE=.*|TIMEZONE=$TIMEZONE|" config.env
 sed -i "s|^RETENTION_DAYS=.*|RETENTION_DAYS=$RETENTION_DAYS|" config.env
 sed -i "s|^OPENSEARCH_HEAP_SIZE=.*|OPENSEARCH_HEAP_SIZE=$HEAP|" config.env
@@ -360,8 +359,8 @@ Write-Ok "SIEM stack installed"
 # ============================================================
 Write-Step "Firewall Rules"
 
-$tcpPorts = @(9000, 1514, 12202)
-$udpPorts = @(514, 12201)
+$tcpPorts = @(3000, 1514)
+$udpPorts = @(514)
 
 foreach ($port in $tcpPorts) {
     $ruleName = "PlanB-SIEM-TCP-$port"
@@ -393,7 +392,7 @@ $wslIP = (wsl.exe -d $DISTRO -- hostname -I 2>&1).Trim().Split()[0] -replace "`0
 Write-Ok "WSL2 IP: $wslIP"
 
 netsh interface portproxy reset 2>&1 | Out-Null
-$allPorts = @(9000, 514, 1514, 12201, 12202)
+$allPorts = @(3000, 514, 1514)
 foreach ($port in $allPorts) {
     netsh interface portproxy add v4tov4 listenport=$port listenaddress=0.0.0.0 connectport=$port connectaddress=$wslIP 2>&1 | Out-Null
     Write-Ok "Port forward: 0.0.0.0:${port} -> ${wslIP}:${port}"
@@ -475,8 +474,7 @@ Write-Host "============================================================" -Foreg
 Write-Host "  DEPLOYMENT COMPLETE" -ForegroundColor Green
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Graylog UI  : https://${HOST_IP}:9000" -ForegroundColor White
-Write-Host "  Username    : admin" -ForegroundColor White
+Write-Host "  Dashboard   : http://${HOST_IP}:3000" -ForegroundColor White
 Write-Host "  Password    : $ADMIN_PASSWORD" -ForegroundColor White
 Write-Host ""
 Write-Host "  Client Name : $CLIENT_NAME" -ForegroundColor Gray
@@ -487,6 +485,9 @@ Write-Host "  Logs        : C:\PlanB-SIEM\startup.log (Windows)" -ForegroundColo
 Write-Host "                /var/log/plansb-siem-startup.log (WSL)" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  CA cert on Desktop - import to remove browser warning" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "  Syslog UDP  : ${HOST_IP}:514" -ForegroundColor Gray
+Write-Host "  Syslog TCP  : ${HOST_IP}:1514" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  The SIEM will auto-start on every boot." -ForegroundColor Green
 Write-Host ""

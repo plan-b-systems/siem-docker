@@ -44,10 +44,10 @@ GRACE_PERIOD_DAYS    = int(os.environ.get("GRACE_PERIOD_DAYS", "7"))
 STATE_FILE           = Path(os.environ.get("STATE_FILE",   "/data/license_state.json"))
 LOG_FILE             = Path(os.environ.get("LOG_FILE",     "/data/license_checker.log"))
 TZ_NAME              = os.environ.get("TZ",                "UTC")
-GRAYLOG_CONTAINER    = os.environ.get("GRAYLOG_CONTAINER",    "plansb-graylog")
+SYSLOG_CONTAINER     = os.environ.get("SYSLOG_CONTAINER",     "plansb-syslog")
 OPENSEARCH_CONTAINER = os.environ.get("OPENSEARCH_CONTAINER", "plansb-opensearch")
-MONGODB_CONTAINER    = os.environ.get("MONGODB_CONTAINER",    "plansb-mongodb")
-VERSION              = os.environ.get("VERSION",              "1.01")
+DASHBOARD_CONTAINER  = os.environ.get("DASHBOARD_CONTAINER",  "plansb-dashboard")
+VERSION              = os.environ.get("VERSION",              "2.00")
 
 # ── State constants ──────────────────────────────────────────────────────
 
@@ -129,13 +129,13 @@ def _find_container(client, name: str):
 
 
 def stop_services() -> bool:
-    """Gracefully stop Graylog then OpenSearch.  MongoDB is left running."""
+    """Gracefully stop syslog, dashboard, then OpenSearch."""
     client = _docker_client()
     if client is None:
         return False
 
     success = True
-    for name in [GRAYLOG_CONTAINER, OPENSEARCH_CONTAINER]:
+    for name in [SYSLOG_CONTAINER, DASHBOARD_CONTAINER, OPENSEARCH_CONTAINER]:
         container = _find_container(client, name)
         if container is None:
             log.warning("Container not found: %s", name)
@@ -154,13 +154,13 @@ def stop_services() -> bool:
 
 
 def start_services() -> bool:
-    """Start OpenSearch first, then Graylog."""
+    """Start OpenSearch first, then syslog and dashboard."""
     client = _docker_client()
     if client is None:
         return False
 
     success = True
-    for name in [OPENSEARCH_CONTAINER, GRAYLOG_CONTAINER]:
+    for name in [OPENSEARCH_CONTAINER, SYSLOG_CONTAINER, DASHBOARD_CONTAINER]:
         container = _find_container(client, name)
         if container is None:
             log.warning("Container not found: %s", name)
@@ -316,9 +316,9 @@ def collect_health() -> dict:
 
     # Container statuses
     if client:
-        metrics["graylog_status"] = _get_container_status(client, GRAYLOG_CONTAINER)
+        metrics["syslog_status"] = _get_container_status(client, SYSLOG_CONTAINER)
         metrics["opensearch_status"] = _get_container_status(client, OPENSEARCH_CONTAINER)
-        metrics["mongodb_status"] = _get_container_status(client, MONGODB_CONTAINER)
+        metrics["dashboard_status"] = _get_container_status(client, DASHBOARD_CONTAINER)
         metrics["license_checker_status"] = "running"
 
         # OpenSearch stats
@@ -336,9 +336,9 @@ def send_health_report() -> None:
             log.info("Health report sent: disk=%s%% mem=%s%% containers=%s/%s/%s cluster=%s",
                      metrics.get("disk_percent", "?"),
                      metrics.get("mem_percent", "?"),
-                     metrics.get("graylog_status", "?"),
+                     metrics.get("syslog_status", "?"),
                      metrics.get("opensearch_status", "?"),
-                     metrics.get("mongodb_status", "?"),
+                     metrics.get("dashboard_status", "?"),
                      metrics.get("os_cluster_health", "?"))
         else:
             log.warning("Health report failed: HTTP %d", resp.status_code)

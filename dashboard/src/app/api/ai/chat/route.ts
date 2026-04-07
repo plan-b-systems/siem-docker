@@ -122,10 +122,40 @@ function getAiKey(): { apiKey: string; dailyBudget: number; tier: string } | nul
   return null
 }
 
+async function getDailyUsage(): Promise<number> {
+  const today = new Date().toISOString().split('T')[0]
+  try {
+    const data = await osQuery('GET', `/plansb-ai-usage/_doc/${today}`)
+    return data._source?.count || 0
+  } catch { return 0 }
+}
+
+async function incrementDailyUsage(): Promise<void> {
+  const today = new Date().toISOString().split('T')[0]
+  try {
+    await osQuery('POST', `/plansb-ai-usage/_update/${today}`, {
+      script: { source: 'ctx._source.count += 1', lang: 'painless' },
+      upsert: { count: 1, date: today },
+    })
+  } catch { /* ignore — non-critical */ }
+}
+
 export async function POST(request: NextRequest) {
   const aiConfig = getAiKey()
   if (!aiConfig) {
     return NextResponse.json({ error: 'AI not configured. Contact Plan-B Systems to enable AI tier.' }, { status: 503 })
+  }
+
+  // Budget enforcement
+  if (aiConfig.dailyBudget > 0 && aiConfig.dailyBudget < 9999) {
+    const used = await getDailyUsage()
+    if (used >= aiConfig.dailyBudget) {
+      return NextResponse.json({
+        error: `Daily AI budget exhausted (${used}/${aiConfig.dailyBudget}). Resets at midnight.`,
+        budget_used: used,
+        budget_total: aiConfig.dailyBudget,
+      }, { status: 429 })
+    }
   }
 
   const body = await request.json()
@@ -236,12 +266,18 @@ export async function POST(request: NextRequest) {
     history.push({ role: 'assistant', content: assistantContent, model })
     if (history.length > 40) history.splice(0, history.length - 40)
 
+    // Track usage
+    await incrementDailyUsage()
+    const budgetUsed = await getDailyUsage()
+
     return NextResponse.json({
       session_id: sid,
       message: assistantContent,
       suggestions,
       model: model === SONNET_MODEL ? 'sonnet' : 'haiku',
       result_count: resultCount,
+      budget_used: budgetUsed,
+      budget_total: aiConfig.dailyBudget,
     })
   } catch (error: any) {
     console.error('[AI] Error:', error?.message)

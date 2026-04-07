@@ -420,6 +420,52 @@ def collect_health() -> dict:
     return metrics
 
 
+def report_ai_usage() -> None:
+    """Report AI usage to the cloud for billing."""
+    if not CLIENT_SECRET:
+        return
+    try:
+        # Read usage from OpenSearch via the dashboard's internal network
+        client = _docker_client()
+        if not client:
+            return
+        container = _find_container(client, OPENSEARCH_CONTAINER)
+        if not container or container.status != "running":
+            return
+
+        # Get current month's usage from the plansb-ai-usage index
+        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        period = today[:7]  # "2026-04"
+
+        exit_code, output = container.exec_run(
+            f"curl -sf http://localhost:9200/plansb-ai-usage/_search?size=31",
+            demux=True
+        )
+        total_queries = 0
+        if exit_code == 0 and output[0]:
+            data = json.loads(output[0].decode())
+            for hit in data.get("hits", {}).get("hits", []):
+                src = hit.get("_source", {})
+                if src.get("date", "").startswith(period):
+                    total_queries += src.get("count", 0)
+
+        if total_queries > 0:
+            usage_url = LICENSE_API_URL.replace("/license/check", "/license/usage")
+            resp = requests.post(usage_url, json={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "query_count": total_queries,
+                "tokens_used": 0,
+                "period": period,
+            }, timeout=30, verify=True)
+            if resp.status_code == 200:
+                log.info("AI usage reported: %d queries for %s", total_queries, period)
+            else:
+                log.warning("AI usage report failed: HTTP %d", resp.status_code)
+    except Exception as exc:
+        log.debug("AI usage report error: %s", exc)
+
+
 def send_health_report() -> None:
     """Collect health metrics and send to the portal."""
     try:
@@ -551,6 +597,10 @@ def run_license_check() -> None:
 
     save_state(state)
     log.info("Check complete  |  new state=%s", state["status"])
+
+    # Report AI usage after each license check
+    report_ai_usage()
+
     log.info("─" * 60)
 
 # ── Entry point ──────────────────────────────────────────────────────────

@@ -279,7 +279,7 @@ fi
 # Clone or update
 if [ -d /opt/plansb-siem/.git ]; then
     echo "Repo exists, pulling latest..."
-    cd /opt/plansb-siem && git pull origin main 2>&1 || true
+    cd /opt/plansb-siem && git fetch origin v2 2>&1 && git checkout v2 2>&1 && git pull origin v2 2>&1 || true
 
     # Clean generated artifacts from prior install to prevent stale
     # secrets/certs being reused with fresh Docker volumes
@@ -298,7 +298,7 @@ if [ -d /opt/plansb-siem/.git ]; then
     docker volume ls -q --filter name=plansb-siem_ | xargs -r docker volume rm 2>/dev/null || true
 else
     echo "Cloning repository..."
-    git clone https://github.com/plan-b-systems/siem-docker.git /opt/plansb-siem 2>&1
+    git clone -b v2 https://github.com/plan-b-systems/siem-docker.git /opt/plansb-siem 2>&1
 fi
 
 cd /opt/plansb-siem

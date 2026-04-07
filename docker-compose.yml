@@ -1,6 +1,7 @@
 # ============================================================
-# Plan-B Systems SIEM Stack
-# Graylog 7.2 + OpenSearch 2.x + MongoDB 7.0
+# Plan-B Systems SIEM Stack — v2
+# OpenSearch 2.x + Syslog Receiver + Dashboard + License Checker
+# No Graylog, no MongoDB
 # Run via install.sh or: docker compose --env-file config.env up -d
 # ============================================================
 
@@ -18,41 +19,10 @@ networks:
         - subnet: 172.20.1.0/24
 
 volumes:
-  mongodb-data:
   opensearch-data:
-  graylog-data:
-  graylog-journal:
   license-data:
 
 services:
-
-  # ── MongoDB ──────────────────────────────────────────────
-  mongodb:
-    image: mongo:7.0
-    container_name: plansb-mongodb
-    restart: unless-stopped
-    networks:
-      - siem-internal
-    volumes:
-      - mongodb-data:/data/db
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: "${MONGO_USER:-graylog}"
-      MONGO_INITDB_ROOT_PASSWORD: "${MONGO_PASSWORD}"
-      TZ: "${TIMEZONE:-Asia/Jerusalem}"
-    healthcheck:
-      test: ["CMD", "mongosh", "-u", "${MONGO_USER:-graylog}", "-p", "${MONGO_PASSWORD}", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "5"
-    labels:
-      com.planbsystems.role: "mongodb"
-      com.planbsystems.client: "${CLIENT_NAME}"
 
   # ── OpenSearch ───────────────────────────────────────────
   opensearch:
@@ -64,7 +34,7 @@ services:
     volumes:
       - opensearch-data:/usr/share/opensearch/data
     environment:
-      cluster.name: "graylog-cluster"
+      cluster.name: "plansb-cluster"
       node.name: "opensearch-node1"
       discovery.type: "single-node"
       OPENSEARCH_JAVA_OPTS: "-Xms${OPENSEARCH_HEAP_SIZE:-2g} -Xmx${OPENSEARCH_HEAP_SIZE:-2g}"
@@ -72,7 +42,7 @@ services:
       DISABLE_SECURITY_PLUGIN: "true"  # Mitigated: OpenSearch on internal-only network, no external port exposure
       DISABLE_INSTALL_DEMO_CONFIG: "true"
       indices.query.bool.max_clause_count: "32768"
-      action.auto_create_index: "false"
+      action.auto_create_index: "true"
       cluster.routing.allocation.disk.watermark.low: "80%"
       cluster.routing.allocation.disk.watermark.high: "${DISK_WATERMARK_HIGH:-85}%"
       cluster.routing.allocation.disk.watermark.flood_stage: "${DISK_WATERMARK_FLOOD:-92}%"
@@ -99,80 +69,84 @@ services:
       com.planbsystems.role: "opensearch"
       com.planbsystems.client: "${CLIENT_NAME}"
 
-  # ── Graylog 7.2 ──────────────────────────────────────────
-  graylog:
-    image: ${GRAYLOG_IMAGE:-graylog/graylog:7.0}
-    container_name: plansb-graylog
+  # ── Syslog Receiver ─────────────────────────────────────
+  syslog-receiver:
+    build:
+      context: ./syslog-receiver
+      dockerfile: Dockerfile
+    image: plansb-syslog:latest
+    container_name: plansb-syslog
     restart: unless-stopped
     networks:
-      - siem-net       # external: web UI + syslog/GELF ports
-      - siem-internal  # internal: MongoDB + OpenSearch
+      - siem-net       # external: receive syslog from network devices
+      - siem-internal  # internal: write to OpenSearch
     depends_on:
-      mongodb:
-        condition: service_healthy
       opensearch:
         condition: service_healthy
-    volumes:
-      - graylog-data:/usr/share/graylog/data
-      - graylog-journal:/usr/share/graylog/data/journal
-      - ./certs:/usr/share/graylog/data/config/certs:ro
-      - ./graylog/cacerts:/opt/java/openjdk/lib/security/cacerts:ro
     environment:
-      # Core
-      GRAYLOG_IS_MASTER: "true"
-      GRAYLOG_NODE_ID_FILE: "/usr/share/graylog/data/config/node-id"
-      GRAYLOG_PASSWORD_SECRET: "${GRAYLOG_PASSWORD_SECRET}"
-      GRAYLOG_ROOT_PASSWORD_SHA2: "${GRAYLOG_ROOT_PASSWORD_SHA2}"
-      GRAYLOG_ROOT_USERNAME: "admin"
-      GRAYLOG_ROOT_TIMEZONE: "${TIMEZONE:-Asia/Jerusalem}"
-      # HTTP / TLS
-      GRAYLOG_HTTP_BIND_ADDRESS: "0.0.0.0:9000"
-      GRAYLOG_HTTP_PUBLISH_URI: "https://${GRAYLOG_HOSTNAME:-localhost}:9000/"
-      GRAYLOG_HTTP_ENABLE_TLS: "true"
-      GRAYLOG_HTTP_TLS_CERT_FILE: "/usr/share/graylog/data/config/certs/graylog.crt"
-      GRAYLOG_HTTP_TLS_KEY_FILE: "/usr/share/graylog/data/config/certs/graylog.key"
-      # OpenSearch
-      GRAYLOG_ELASTICSEARCH_HOSTS: "http://opensearch:9200"
-      GRAYLOG_ELASTICSEARCH_COMPRESSION_ENABLED: "true"
-      GRAYLOG_ELASTICSEARCH_INDEX_PREFIX: "graylog"
-      GRAYLOG_ELASTICSEARCH_SHARDS: "1"
-      GRAYLOG_ELASTICSEARCH_REPLICAS: "0"
-      GRAYLOG_ELASTICSEARCH_MAX_NUMBER_OF_INDICES: "${RETENTION_DAYS:-730}"
-      GRAYLOG_ELASTICSEARCH_RETENTION_STRATEGY: "delete"
-      GRAYLOG_ELASTICSEARCH_ROTATION_STRATEGY: "time"
-      GRAYLOG_ELASTICSEARCH_MAX_SIZE_PER_INDEX: "1073741824"
-      # MongoDB
-      GRAYLOG_MONGODB_URI: "mongodb://${MONGO_USER:-graylog}:${MONGO_PASSWORD}@mongodb:27017/graylog?authSource=admin"
-      # Processing
-      GRAYLOG_PROCESSBUFFER_PROCESSORS: "5"
-      GRAYLOG_OUTPUTBUFFER_PROCESSORS: "3"
-      GRAYLOG_PROCESSOR_WAIT_STRATEGY: "blocking"
-      GRAYLOG_RING_SIZE: "65536"
-      GRAYLOG_OUTPUT_BATCH_SIZE: "500"
-      GRAYLOG_OUTPUT_FLUSH_INTERVAL: "1"
-      # Timezone
+      OPENSEARCH_URL: "http://opensearch:9200"
+      CLIENT_ID: "${CLIENT_ID}"
+      CLIENT_NAME: "${CLIENT_NAME}"
+      RETENTION_DAYS: "${RETENTION_DAYS:-730}"
       TZ: "${TIMEZONE:-Asia/Jerusalem}"
     ports:
-      # Web UI: bind to LAN IP only (set BIND_ADDRESS in config.env, default 0.0.0.0)
-      - "${BIND_ADDRESS:-0.0.0.0}:${GRAYLOG_WEB_PORT:-9000}:9000"
-      # Syslog/GELF inputs: must accept from network devices
       - "0.0.0.0:${SYSLOG_UDP_PORT:-514}:514/udp"
       - "0.0.0.0:${SYSLOG_TCP_PORT:-1514}:1514/tcp"
-      - "0.0.0.0:${GELF_UDP_PORT:-12201}:12201/udp"
-      - "0.0.0.0:${GELF_TCP_PORT:-12202}:12202/tcp"
     healthcheck:
-      test: ["CMD-SHELL", "curl -skf https://localhost:9000/api/ -o /dev/null && echo ok || exit 1"]
+      test: ["CMD-SHELL", "node -e \"require('net').createConnection(1514,'localhost').on('connect',()=>{console.log('ok');process.exit(0)}).on('error',()=>process.exit(1))\""]
       interval: 30s
-      timeout: 15s
-      retries: 20
-      start_period: 180s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
     logging:
       driver: "json-file"
       options:
         max-size: "100m"
         max-file: "5"
     labels:
-      com.planbsystems.role: "graylog"
+      com.planbsystems.role: "syslog-receiver"
+      com.planbsystems.client: "${CLIENT_NAME}"
+
+  # ── Dashboard ────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    image: plansb-dashboard:latest
+    container_name: plansb-dashboard
+    restart: unless-stopped
+    networks:
+      - siem-net       # external: web UI
+      - siem-internal  # internal: query OpenSearch
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      OPENSEARCH_URL: "http://opensearch:9200"
+      CLIENT_ID: "${CLIENT_ID}"
+      CLIENT_NAME: "${CLIENT_NAME}"
+      DASHBOARD_PASSWORD_HASH: "${DASHBOARD_PASSWORD_HASH}"
+      JWT_SECRET: "${JWT_SECRET}"
+      TIMEZONE: "${TIMEZONE:-Asia/Jerusalem}"
+      RETENTION_DAYS: "${RETENTION_DAYS:-730}"
+      LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.systems/api/license/check}"
+      NODE_ENV: "production"
+      TZ: "${TIMEZONE:-Asia/Jerusalem}"
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${DASHBOARD_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health -o /dev/null && echo ok || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+    labels:
+      com.planbsystems.role: "dashboard"
       com.planbsystems.client: "${CLIENT_NAME}"
 
   # ── License Checker ──────────────────────────────────────
@@ -187,17 +161,20 @@ services:
       - siem-net       # external: API calls to license server
       - siem-internal  # internal: health checks on containers
     depends_on:
-      graylog:
+      syslog-receiver:
+        condition: service_healthy
+      dashboard:
         condition: service_healthy
     volumes:
       - license-data:/data
-      - /var/run/docker.sock:/var/run/docker.sock:ro  # TODO: replace with healthcheck API — needed for container stop/start on license expiry
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.co.il/api/license/check}"
+      LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.systems/api/license/check}"
       CLIENT_ID: "${CLIENT_ID}"
       GRACE_PERIOD_DAYS: "${GRACE_PERIOD_DAYS:-7}"
-      GRAYLOG_CONTAINER: "plansb-graylog"
+      SYSLOG_CONTAINER: "plansb-syslog"
       OPENSEARCH_CONTAINER: "plansb-opensearch"
+      DASHBOARD_CONTAINER: "plansb-dashboard"
       STATE_FILE: "/data/license_state.json"
       LOG_FILE: "/data/license_checker.log"
       TZ: "${TIMEZONE:-Asia/Jerusalem}"

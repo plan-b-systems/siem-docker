@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import bcrypt from 'bcryptjs'
-import { createSession, setSessionCookie } from '@/lib/auth'
+import { createSession, setSessionCookie, clearSessionCookie } from '@/lib/auth'
 import { config } from '@/lib/config'
 
 export async function POST(req: Request) {
@@ -24,4 +24,9 @@ export async function POST(req: Request) {
     console.error('[login] Error:', error)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
+}
+
+export async function DELETE() {
+  clearSessionCookie()
+  return NextResponse.json({ success: true })
 }

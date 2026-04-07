@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server'
 import { config } from '@/lib/config'
+import { existsSync, readFileSync } from 'fs'
 
 export async function GET() {
-  const fs = require('fs')
-
-  // Read license state from shared volume
   const stateFile = '/data/license_state.json'
   const aiKeyFile = process.env.AI_KEY_FILE || '/data/ai_key.json'
 
@@ -18,8 +16,8 @@ export async function GET() {
   }
 
   try {
-    if (fs.existsSync(stateFile)) {
-      const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
+    if (existsSync(stateFile)) {
+      const state = JSON.parse(readFileSync(stateFile, 'utf8'))
       license.status = state.status || 'UNKNOWN'
       license.last_check = state.last_check
       license.active = state.last_result?.active ?? false
@@ -31,8 +29,8 @@ export async function GET() {
 
   // AI tier info
   try {
-    if (fs.existsSync(aiKeyFile)) {
-      const ai = JSON.parse(fs.readFileSync(aiKeyFile, 'utf8'))
+    if (existsSync(aiKeyFile)) {
+      const ai = JSON.parse(readFileSync(aiKeyFile, 'utf8'))
       license.ai_tier = ai.ai_tier || 'NONE'
       license.ai_daily_budget = ai.daily_budget || 0
       license.ai_updated = ai.updated_at

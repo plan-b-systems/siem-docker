@@ -105,9 +105,9 @@ function getAiKey(): { apiKey: string; dailyBudget: number; tier: string } | nul
   // Try file first (delivered by license checker), then env var fallback
   const keyFile = process.env.AI_KEY_FILE || '/data/ai_key.json'
   try {
-    const fs = require('fs')
-    if (fs.existsSync(keyFile)) {
-      const data = JSON.parse(fs.readFileSync(keyFile, 'utf8'))
+    const { existsSync: exists, readFileSync: readFile } = require('fs')
+    if (exists(keyFile)) {
+      const data = JSON.parse(readFile(keyFile, 'utf8'))
       if (data.api_key) {
         return { apiKey: data.api_key, dailyBudget: data.daily_budget || 0, tier: data.ai_tier || 'UNKNOWN' }
       }

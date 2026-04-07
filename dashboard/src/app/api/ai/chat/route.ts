@@ -159,13 +159,25 @@ export async function POST(request: NextRequest) {
     let assistantContent = response.content.map(c => c.type === 'text' ? c.text : '').join('')
     let resultCount: number | null = null
 
-    // Check for OpenSearch query
+    // Check for OpenSearch query — try code block first, then raw JSON
     const queryMatch = assistantContent.match(/```(?:opensearch|json)\n([\s\S]*?)\n```/)
-      || assistantContent.match(/(\{[\s\S]*?"action"\s*:\s*"(?:search|aggregate)"[\s\S]*?\})/)
 
-    if (queryMatch) {
+    // If no code block, try to extract JSON with action field
+    let queryJson: string | null = queryMatch ? queryMatch[1] : null
+    if (!queryJson) {
+      const rawMatch = assistantContent.match(/(\{[\s\S]*?"action"\s*:\s*"(?:search|aggregate)"[\s\S]*?\})/)
+      if (rawMatch) {
+        // Try to find valid JSON by trimming from the end
+        let candidate = rawMatch[1]
+        for (let i = candidate.length; i > 10; i--) {
+          try { JSON.parse(candidate.substring(0, i)); queryJson = candidate.substring(0, i); break } catch {}
+        }
+      }
+    }
+
+    if (queryJson) {
       try {
-        const parsed = JSON.parse(queryMatch[1])
+        const parsed = JSON.parse(queryJson)
         let osQueryBody: any = parsed.query || parsed
         if (parsed.action && parsed.query) osQueryBody = parsed.query
         if (osQueryBody.bool && !osQueryBody.query) osQueryBody = { query: osQueryBody }

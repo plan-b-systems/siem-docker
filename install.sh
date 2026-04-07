@@ -84,34 +84,7 @@ else
     info "JWT_SECRET already set"
 fi
 
-# DASHBOARD_PASSWORD_HASH (bcrypt)
-if ! grep -q "^DASHBOARD_PASSWORD_HASH=" config.env 2>/dev/null || \
-   [[ -z "$(grep "^DASHBOARD_PASSWORD_HASH=" config.env | cut -d= -f2-)" ]]; then
-    # Use Node.js (from Docker) to generate bcrypt hash
-    PW_HASH=$(docker run --rm node:22-alpine node -e "
-      const bcrypt = require('bcryptjs');
-      // Read password from stdin to avoid shell escaping issues
-      process.stdin.resume();
-      process.stdin.setEncoding('utf8');
-      let data = '';
-      process.stdin.on('data', c => data += c);
-      process.stdin.on('end', () => {
-        console.log(bcrypt.hashSync(data.trim(), 12));
-      });
-    " <<< "${DASHBOARD_PASSWORD}" 2>/dev/null || \
-    docker run --rm node:22-alpine sh -c "npm install -s bcryptjs 2>/dev/null && node -e \"console.log(require('bcryptjs').hashSync('${DASHBOARD_PASSWORD}', 12))\"" 2>/dev/null)
-
-    if [[ -n "$PW_HASH" ]]; then
-        sed -i '/^#\s*DASHBOARD_PASSWORD_HASH=/d' config.env
-        sed -i '/^DASHBOARD_PASSWORD_HASH=/d' config.env
-        echo "DASHBOARD_PASSWORD_HASH=${PW_HASH}" >> config.env
-        info "Generated DASHBOARD_PASSWORD_HASH"
-    else
-        warn "Could not generate password hash — dashboard login may not work"
-    fi
-else
-    info "DASHBOARD_PASSWORD_HASH already set"
-fi
+# DASHBOARD_PASSWORD_HASH (bcrypt) — generated after image build (step 6)
 
 set -a; source config.env; set +a
 
@@ -179,6 +152,29 @@ info "Local images built"
 
 docker compose --env-file config.env pull opensearch
 info "OpenSearch image pulled"
+
+# ── Generate DASHBOARD_PASSWORD_HASH (needs dashboard image) ──
+if ! grep -q "^DASHBOARD_PASSWORD_HASH=" config.env 2>/dev/null || \
+   [[ -z "$(grep "^DASHBOARD_PASSWORD_HASH=" config.env | cut -d= -f2-)" ]]; then
+    info "Generating dashboard password hash..."
+    printf '%s' "${DASHBOARD_PASSWORD}" > /tmp/.plansb_pw
+    PW_HASH=$(docker run --rm -v /tmp/.plansb_pw:/tmp/pw:ro plansb-dashboard:latest \
+        node -e "const b=require('bcryptjs');const pw=require('fs').readFileSync('/tmp/pw','utf8').trim();console.log(b.hashSync(pw,12))" 2>/dev/null)
+    rm -f /tmp/.plansb_pw
+
+    if [[ -n "$PW_HASH" ]]; then
+        sed -i '/^#\s*DASHBOARD_PASSWORD_HASH=/d' config.env
+        sed -i '/^DASHBOARD_PASSWORD_HASH=/d' config.env
+        echo "DASHBOARD_PASSWORD_HASH=${PW_HASH}" >> config.env
+        info "Generated DASHBOARD_PASSWORD_HASH"
+        # Reload config
+        set -a; source config.env; set +a
+    else
+        die "Failed to generate password hash. Check Docker and dashboard image."
+    fi
+else
+    info "DASHBOARD_PASSWORD_HASH already set"
+fi
 
 # ════════════════════════════════════════════════════════════
 # 7. Start services

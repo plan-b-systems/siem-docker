@@ -130,6 +130,7 @@ services:
       TIMEZONE: "${TIMEZONE:-Asia/Jerusalem}"
       RETENTION_DAYS: "${RETENTION_DAYS:-730}"
       LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.systems/api/license/check}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       NODE_ENV: "production"
       TZ: "${TIMEZONE:-Asia/Jerusalem}"
     ports:

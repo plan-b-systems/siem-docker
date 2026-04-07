@@ -173,7 +173,8 @@ JSEOF
     if [[ -n "$PW_HASH" && "$PW_HASH" == \$2* ]]; then
         sed -i '/^#\s*DASHBOARD_PASSWORD_HASH=/d' config.env
         sed -i '/^DASHBOARD_PASSWORD_HASH=/d' config.env
-        echo "DASHBOARD_PASSWORD_HASH=${PW_HASH}" >> config.env
+        # Single-quote the hash to prevent bash interpreting $2a as a variable
+        echo "DASHBOARD_PASSWORD_HASH='${PW_HASH}'" >> config.env
         info "Generated DASHBOARD_PASSWORD_HASH"
         set -a; source config.env; set +a
     else

@@ -39,4 +39,4 @@ fi
 cd "$INSTALL_DIR"
 chmod +x deploy-ubuntu.sh
 echo ""
-exec ./deploy-ubuntu.sh
+exec ./deploy-ubuntu.sh </dev/tty

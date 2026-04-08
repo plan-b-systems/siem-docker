@@ -1,212 +1,136 @@
-# Plan-B Systems SIEM – Ubuntu/Linux Deployment Guide
+# Plan-B Systems SIEM v2 — Ubuntu/Linux Deployment Guide
 
-Step-by-step instructions for deploying the SIEM stack on a fresh Ubuntu machine at a client site.
+## Quick Install (One-Liner)
+
+SSH into the Ubuntu machine as root and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/v2/install-linux.sh | sudo bash
+```
+
+The script will:
+1. Install git and Docker (if not present)
+2. Clone the siem-docker repo (v2 branch) to `/opt/plansb-siem`
+3. Prompt for client details (name, ID, LAN IP, password, timezone, retention)
+4. Auto-detect RAM and set OpenSearch heap size
+5. Deploy 4 containers: OpenSearch, Syslog Receiver, Dashboard, License Checker
+6. Configure retention policies and auto-start on boot
+
+**Total time: ~5 minutes** (mostly Docker image pulls).
+
+After install, access the dashboard at `http://<LAN_IP>:3000`.
 
 ---
 
 ## Prerequisites
 
-- Ubuntu 22.04 or 24.04 LTS (fresh install)
-- Minimum 8 GB RAM, 200 GB free disk (or external drive for 730-day retention)
+- Ubuntu 22.04 or 24.04 LTS (fresh install recommended)
+- Minimum 4 GB RAM, 40 GB free disk
+- Recommended: 8 GB RAM, 200 GB+ disk (for 730-day retention)
 - Internet access (for pulling Docker images)
-- You know the client's: IP address, hostname, timezone, and have a license ID ready from the Plan-B portal
+- A Client ID from the Plan-B portal (https://siemsys.plan-b.systems)
 
 ---
 
-## Step 1 – Install Docker
+## What Gets Deployed
 
-SSH into the Ubuntu machine and run:
+SIEM v2 is a 4-container Docker stack:
+
+| Container | Purpose | Ports |
+|-----------|---------|-------|
+| `plansb-opensearch` | Log storage and search engine | Internal only |
+| `plansb-syslog` | Receives syslog from client devices | UDP 514, TCP 1514 |
+| `plansb-dashboard` | Web UI — log viewer, AI chat, threats | HTTP 3000 |
+| `plansb-license-checker` | License validation + AI key delivery | Internal only |
+
+---
+
+## Manual Installation (Step by Step)
+
+### Step 1 — Install Docker
 
 ```bash
 curl -fsSL https://get.docker.com | sh
-apt-get install -y docker-compose-plugin gettext-base openssl git
-usermod -aG docker $USER
-newgrp docker
+sudo systemctl enable docker && sudo systemctl start docker
 ```
 
-Verify:
-```bash
-docker version
-docker compose version
-```
-
----
-
-## Step 2 – Clone the Repository
+### Step 2 — Clone the Repository
 
 ```bash
-git clone https://github.com/plan-b-systems/siem-docker.git /opt/plansb-siem
+sudo git clone -b v2 https://github.com/plan-b-systems/siem-docker.git /opt/plansb-siem
 cd /opt/plansb-siem
 ```
 
-> The repo is public — no credentials required.
-
----
-
-## Step 3 – (Optional) Set Up External Storage
-
-For 730-day log retention, an external USB/SATA drive is recommended. Skip this step if the internal disk has enough space (200+ GB).
+### Step 3 — Run the Deployment Script
 
 ```bash
-# 1. Identify the external drive
-lsblk
-
-# 2. Format the drive (ONE-TIME — THIS ERASES THE DRIVE)
-sudo mkfs.ext4 /dev/sdb1
-
-# 3. Create mount point and mount
-sudo mkdir -p /mnt/siem-data
-sudo mount /dev/sdb1 /mnt/siem-data
-
-# 4. Make permanent (survives reboot)
-echo '/dev/sdb1 /mnt/siem-data ext4 defaults,nofail 0 2' | sudo tee -a /etc/fstab
-
-# 5. Verify
-df -h /mnt/siem-data
+sudo ./deploy-ubuntu.sh
 ```
 
-> **Disk sizing guide:** ~10 devices → 200 GB, ~50 devices → 500 GB–1 TB, 200+ devices → 2–4 TB
+The script will interactively ask for:
+- **Client name** — short name, no spaces (e.g., `acme-tlv`)
+- **Client ID** — from the Plan-B portal
+- **Machine LAN IP** — auto-detected, confirm or change
+- **Dashboard admin password** — minimum 8 characters
+- **Timezone** — default: `Asia/Jerusalem`
+- **Log retention days** — default: 730 (2 years)
+- **External data path** — optional, for dedicated storage drive
 
----
-
-## Step 4 – Configure for the Client
-
-```bash
-cp config.env.template config.env
-nano config.env
-```
-
-Fill in these values:
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `CLIENT_NAME` | Short site name (no spaces) | `acme-tlv` |
-| `CLIENT_ID` | License ID from Plan-B portal | `SITE-0042` |
-| `GRAYLOG_HOSTNAME` | IP or FQDN of this machine | `192.168.1.50` |
-| `HOST_IP` | Same IP as above | `192.168.1.50` |
-| `GRAYLOG_ADMIN_PASSWORD` | Strong admin password | `S3cur3P@ss!` |
-| `TIMEZONE` | Local timezone | `Asia/Jerusalem` |
-| `RETENTION_DAYS` | Days of logs to keep | `730` |
-| `DATA_PATH` | External disk mount (leave empty for internal) | `/mnt/siem-data` |
-| `OPENSEARCH_HEAP_SIZE` | Half of total RAM | `4g` for 8 GB host |
-
-Leave everything else at defaults unless the client has specific port requirements.
-
-Save and exit (`Ctrl+X` → `Y` → `Enter`).
-
----
-
-## Step 5 – Run the Installer
-
-```bash
-sudo ./install.sh
-```
-
-The installer will automatically:
-- Generate all secrets and passwords
-- Create a self-signed TLS certificate
-- Set up external storage directories (if `DATA_PATH` is set)
-- Tune the OS for OpenSearch
-- Pull all Docker images
-- Start all 4 containers
-- Configure Graylog inputs (Syslog + GELF)
-- Register a systemd service for auto-start on boot
-
-This takes **3–5 minutes** on first run (image download time varies).
-
-When complete you will see:
-
-```
-╔══════════════════════════════════════════════════════╗
-║              Installation complete!                  ║
-╚══════════════════════════════════════════════════════╝
-  Graylog UI  : https://<HOSTNAME>:9000
-  Username    : admin
-  Password    : <your password>
-  Retention   : 730 days
-  Data path   : /mnt/siem-data (or Docker named volumes)
-```
-
----
-
-## Step 6 – Verify the Stack
-
-```bash
-docker compose --env-file config.env ps
-```
-
-All 4 containers should show `(healthy)`:
-
-```
-plansb-graylog           Up (healthy)
-plansb-opensearch        Up (healthy)
-plansb-mongodb           Up (healthy)
-plansb-license-checker   Up (healthy)
-```
-
----
-
-## Step 7 – Access the UI
+### Step 4 — Access the Dashboard
 
 Open a browser and go to:
 
 ```
-https://<HOST_IP>:9000
+http://<LAN_IP>:3000
 ```
 
-Login: `admin` / `<GRAYLOG_ADMIN_PASSWORD>`
-
-> **Certificate warning in browser?**
-> The stack uses a self-signed certificate. To remove the warning,
-> import `certs/ca.crt` into the browser or OS certificate store.
+Login with the admin password you set during deployment.
 
 ---
 
-## Step 8 – Configure Log Sources
+## Configure Log Sources
 
-Point client devices to the SIEM IP on these ports:
+Point client devices to the SIEM server on these ports:
 
-| Source type | Protocol | Port | Config example |
-|-------------|----------|------|----------------|
-| Firewalls, switches, routers | Syslog UDP | 514 | `logging host <SIEM_IP>` |
-| Linux servers | Syslog TCP | 1514 | `*.* @@<SIEM_IP>:1514` in rsyslog |
-| Windows (NXLog/Winlogbeat) | GELF TCP | 12202 | Set output host/port |
-| Applications | GELF UDP | 12201 | Set GELF output |
+| Source Type | Protocol | Port |
+|-------------|----------|------|
+| Firewalls (FortiGate, Palo Alto, etc.) | Syslog UDP | 514 |
+| Linux servers (rsyslog) | Syslog TCP | 1514 |
+| Windows (NXlog) | Syslog TCP | 1514 |
+
+Example rsyslog config:
+```
+*.* @@<SIEM_IP>:1514
+```
+
+Example FortiGate:
+```
+config log syslogd setting
+    set server "<SIEM_IP>"
+    set port 514
+end
+```
 
 ---
 
-## Step 9 – Open Firewall (if UFW is enabled)
+## Firewall (if UFW is enabled)
 
 ```bash
-sudo ufw allow 9000/tcp    # Graylog Web UI
+sudo ufw allow 3000/tcp    # Dashboard
 sudo ufw allow 514/udp     # Syslog UDP
 sudo ufw allow 1514/tcp    # Syslog TCP
-sudo ufw allow 12201/udp   # GELF UDP
-sudo ufw allow 12202/tcp   # GELF TCP
 ```
 
 ---
 
-## If the Machine Reboots
+## After Reboot
 
 The stack starts automatically via systemd. Nothing to do.
 
-To manually start if needed:
+Manual start if needed:
 ```bash
 cd /opt/plansb-siem
-docker compose --env-file config.env up -d
-```
-
----
-
-## Reconfiguring After Install
-
-If you need to change any settings (IP, hostname, retention, ports, storage path):
-
-```bash
-cd /opt/plansb-siem
-nano config.env          # make your changes
-sudo ./reconfigure.sh    # applies changes and restarts affected services
+docker compose up -d
 ```
 
 ---
@@ -214,95 +138,66 @@ sudo ./reconfigure.sh    # applies changes and restarts affected services
 ## Useful Commands
 
 ```bash
-# Live logs
-docker compose --env-file config.env logs -f
+# Stack status
+docker compose -f /opt/plansb-siem/docker-compose.yml ps
 
-# Check license status
-docker exec plansb-license-checker cat /data/license_state.json
+# Live logs
+docker compose -f /opt/plansb-siem/docker-compose.yml logs -f
 
 # Stop the stack
-docker compose --env-file config.env down
+docker compose -f /opt/plansb-siem/docker-compose.yml down
 
 # Start the stack
-docker compose --env-file config.env up -d
+docker compose -f /opt/plansb-siem/docker-compose.yml up -d
+
+# Check OpenSearch indices
+docker exec plansb-opensearch curl -s http://localhost:9200/_cat/indices?v
 
 # Check disk usage
-df -h /mnt/siem-data
-docker exec plansb-opensearch curl -s localhost:9200/_cat/indices?v
+df -h
 ```
 
 ---
 
 ## Troubleshooting
 
-**"This site can't be reached" from browser**
-- Confirm the machine's IP matches `HOST_IP` in config.env
-- Check firewall: `ufw allow 9000/tcp`
-- Check containers are running: `docker compose --env-file config.env ps`
-
-**Graylog starts then crashes**
+**Dashboard not loading**
 ```bash
-docker compose --env-file config.env logs graylog | grep ERROR
-```
-Most common cause: not enough RAM. Reduce `OPENSEARCH_HEAP_SIZE` in config.env and rerun `./reconfigure.sh`.
-
-**Search errors / certificate errors in Graylog UI** (`SyntaxError: Unexpected token '(', "(certifica"...`)
-
-The CA cert is not in Java's truststore. Run:
-```bash
-keytool -importcert -keystore /opt/plansb-siem/graylog/cacerts -storepass changeit -alias plansb-ca -file /opt/plansb-siem/certs/ca.crt -noprompt
-cd /opt/plansb-siem && docker compose --env-file config.env restart graylog
+docker ps                         # Check all containers running
+docker logs plansb-dashboard      # Check for errors
 ```
 
-**License checker shows EXPIRED but license was renewed**
+**Logs not appearing**
+- Verify source device is sending to the correct IP and port
+- Check: `docker logs plansb-syslog` for connection activity
+- Verify firewall allows UDP 514 / TCP 1514
+
+**OpenSearch won't start**
+```bash
+# Check logs
+docker logs plansb-opensearch
+
+# Most common: vm.max_map_count too low
+sudo sysctl -w vm.max_map_count=262144
+echo 'vm.max_map_count=262144' | sudo tee -a /etc/sysctl.conf
+docker restart plansb-opensearch
+```
+
+**License checker shows EXPIRED**
 ```bash
 docker restart plansb-license-checker
 ```
-
-**External drive not mounted after reboot**
-```bash
-# Check if it's mounted
-df -h /mnt/siem-data
-
-# If not, mount manually and check fstab entry
-sudo mount /dev/sdb1 /mnt/siem-data
-cat /etc/fstab | grep siem-data
-```
-
-**OpenSearch out of disk space**
-```bash
-# Check index sizes
-docker exec plansb-opensearch curl -s localhost:9200/_cat/indices?v
-# Check disk
-df -h /mnt/siem-data
-```
-
----
-
-## Security Notes
-
-The stack includes these security measures out of the box:
-
-- **MongoDB authentication**: auto-generated password, stored in `config.env`
-- **Network isolation**: MongoDB and OpenSearch run on an internal Docker network with no external port exposure
-- **TLS**: Graylog web UI uses self-signed TLS (HTTPS only)
-- **Index retention**: daily rotation, configurable max days (default 730 = 2 years)
-- **License checker**: reports health to the Plan-B portal hourly
-- **Web UI access**: configurable via `BIND_ADDRESS` in `config.env` to restrict to LAN IP
 
 ---
 
 ## Deployment Checklist
 
 - [ ] Ubuntu 22.04/24.04 installed and SSH accessible
-- [ ] Docker installed and working
-- [ ] External drive mounted at `/mnt/siem-data` (if needed)
-- [ ] Repo cloned to `/opt/plansb-siem`
-- [ ] `config.env` filled in with client details (including `DATA_PATH` if using external storage)
-- [ ] `sudo ./install.sh` completed successfully
-- [ ] All 4 containers showing `(healthy)`
-- [ ] Graylog UI accessible in browser
+- [ ] Docker installed and running
+- [ ] Client ID obtained from Plan-B portal
+- [ ] `curl ... | sudo bash` or `./deploy-ubuntu.sh` completed
+- [ ] All 4 containers running (`docker ps`)
+- [ ] Dashboard accessible at `http://<IP>:3000`
 - [ ] Firewall ports open (if UFW enabled)
 - [ ] At least one log source sending data
-- [ ] `ca.crt` imported into client browser/OS
-- [ ] Noted admin password in client handover doc
+- [ ] Admin password documented

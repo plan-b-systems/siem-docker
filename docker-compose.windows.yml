@@ -1,0 +1,184 @@
+# ============================================================
+# Plan-B Systems SIEM Stack — v2 (Windows / pre-built images)
+# Same as docker-compose.yml but pulls from ghcr.io instead of building locally.
+# Used by deploy-windows.ps1 for fast client-site deployment.
+# ============================================================
+
+networks:
+  siem-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+  siem-internal:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.20.1.0/24
+
+volumes:
+  opensearch-data:
+  license-data:
+
+services:
+
+  # ── OpenSearch ───────────────────────────────────────────
+  opensearch:
+    image: opensearchproject/opensearch:2.18.0
+    container_name: plan-b-opensearch
+    restart: unless-stopped
+    networks:
+      - siem-internal
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    environment:
+      cluster.name: "plan-b-cluster"
+      node.name: "opensearch-node1"
+      discovery.type: "single-node"
+      OPENSEARCH_JAVA_OPTS: "-Xms${OPENSEARCH_HEAP_SIZE:-2g} -Xmx${OPENSEARCH_HEAP_SIZE:-2g}"
+      bootstrap.memory_lock: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      indices.query.bool.max_clause_count: "32768"
+      action.auto_create_index: "true"
+      cluster.routing.allocation.disk.watermark.low: "80%"
+      cluster.routing.allocation.disk.watermark.high: "${DISK_WATERMARK_HIGH:-85}%"
+      cluster.routing.allocation.disk.watermark.flood_stage: "${DISK_WATERMARK_FLOOD:-92}%"
+      TZ: "${TIMEZONE:-Asia/Jerusalem}"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?pretty | grep -q '\"status\"'"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 90s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+    labels:
+      com.planbsystems.role: "opensearch"
+      com.planbsystems.client: "${CLIENT_NAME}"
+
+  # ── Syslog Receiver (pre-built) ─────────────────────────
+  syslog-receiver:
+    image: ghcr.io/plan-b-systems/siem-syslog:v2
+    container_name: plan-b-syslog
+    restart: unless-stopped
+    networks:
+      - siem-net
+      - siem-internal
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      OPENSEARCH_URL: "http://opensearch:9200"
+      CLIENT_ID: "${CLIENT_ID}"
+      CLIENT_NAME: "${CLIENT_NAME}"
+      RETENTION_DAYS: "${RETENTION_DAYS:-730}"
+      TZ: "${TIMEZONE:-Asia/Jerusalem}"
+    ports:
+      - "0.0.0.0:${SYSLOG_UDP_PORT:-514}:514/udp"
+      - "0.0.0.0:${SYSLOG_TCP_PORT:-1514}:1514/tcp"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('net').createConnection(1514,'localhost').on('connect',()=>{console.log('ok');process.exit(0)}).on('error',()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+    labels:
+      com.planbsystems.role: "syslog-receiver"
+      com.planbsystems.client: "${CLIENT_NAME}"
+
+  # ── Dashboard (pre-built) ───────────────────────────────
+  dashboard:
+    image: ghcr.io/plan-b-systems/siem-dashboard:v2
+    container_name: plan-b-dashboard
+    restart: unless-stopped
+    networks:
+      - siem-net
+      - siem-internal
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      OPENSEARCH_URL: "http://opensearch:9200"
+      CLIENT_ID: "${CLIENT_ID}"
+      CLIENT_NAME: "${CLIENT_NAME}"
+      DASHBOARD_PASSWORD_HASH: "${DASHBOARD_PASSWORD_HASH}"
+      JWT_SECRET: "${JWT_SECRET}"
+      TIMEZONE: "${TIMEZONE:-Asia/Jerusalem}"
+      RETENTION_DAYS: "${RETENTION_DAYS:-730}"
+      LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.systems/api/license/check}"
+      AI_KEY_FILE: "/data/ai_key.json"
+      HOSTNAME: "0.0.0.0"
+      NODE_ENV: "production"
+      TZ: "${TIMEZONE:-Asia/Jerusalem}"
+    volumes:
+      - license-data:/data:ro
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${DASHBOARD_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+    labels:
+      com.planbsystems.role: "dashboard"
+      com.planbsystems.client: "${CLIENT_NAME}"
+
+  # ── License Checker (pre-built) ─────────────────────────
+  license-checker:
+    image: ghcr.io/plan-b-systems/siem-license-checker:v2
+    container_name: plan-b-license-checker
+    restart: unless-stopped
+    networks:
+      - siem-net
+      - siem-internal
+    depends_on:
+      syslog-receiver:
+        condition: service_healthy
+      dashboard:
+        condition: service_healthy
+    volumes:
+      - license-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.systems/api/license/check}"
+      CLIENT_ID: "${CLIENT_ID}"
+      CLIENT_SECRET: "${CLIENT_SECRET:-}"
+      GRACE_PERIOD_DAYS: "${GRACE_PERIOD_DAYS:-7}"
+      SYSLOG_CONTAINER: "plan-b-syslog"
+      OPENSEARCH_CONTAINER: "plan-b-opensearch"
+      DASHBOARD_CONTAINER: "plan-b-dashboard"
+      STATE_FILE: "/data/license_state.json"
+      LOG_FILE: "/data/license_checker.log"
+      AI_KEY_FILE: "/data/ai_key.json"
+      TZ: "${TIMEZONE:-Asia/Jerusalem}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    labels:
+      com.planbsystems.role: "license-checker"
+      com.planbsystems.client: "${CLIENT_NAME}"

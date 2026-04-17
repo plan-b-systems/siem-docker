@@ -59,8 +59,15 @@ log "Docker daemon ready (waited ${ELAPSED}s)"
 
 # ── Start SIEM stack ──
 cd "$SIEM_DIR"
-log "Starting SIEM stack from ${SIEM_DIR}..."
-docker compose --env-file config.env up -d 2>&1
+
+# Detect which compose file to use (Windows pre-built vs Linux local-build)
+COMPOSE_FILE="docker-compose.yml"
+if [[ -f docker-compose.windows.yml ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+    COMPOSE_FILE="docker-compose.windows.yml"
+fi
+
+log "Starting SIEM stack from ${SIEM_DIR} (${COMPOSE_FILE})..."
+docker compose -f "$COMPOSE_FILE" --env-file config.env up -d 2>&1
 EXIT_CODE=$?
 
 if [[ $EXIT_CODE -eq 0 ]]; then
@@ -71,7 +78,7 @@ else
     log "Retrying after second cleanup..."
     bash "${SIEM_DIR}/resilience/clean-stale-processes.sh" 2>&1
     sleep 3
-    docker compose --env-file config.env up -d 2>&1
+    docker compose -f "$COMPOSE_FILE" --env-file config.env up -d 2>&1
     EXIT_CODE=$?
     if [[ $EXIT_CODE -eq 0 ]]; then
         log "SIEM stack started on retry"

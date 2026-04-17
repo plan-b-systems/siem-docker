@@ -305,7 +305,7 @@ Write-Ok "Docker and tools installed"
 # ============================================================
 # 6. Clone repo and configure
 # ============================================================
-Write-Step "Cloning SIEM Repository"
+Write-Step "Setting Up SIEM"
 
 $setupScript = @"
 #!/bin/bash
@@ -317,42 +317,33 @@ if ! docker info &>/dev/null 2>&1; then
     sleep 5
 fi
 
-# Clone or update
-if [ -d /opt/plan-b-siem/.git ]; then
+SIEM_DIR=/opt/plan-b-siem
+
+# Clone or update repo (needed for compose file, resilience scripts, config template)
+if [ -d \$SIEM_DIR/.git ]; then
     echo "Repo exists, pulling latest..."
-    cd /opt/plan-b-siem && git fetch origin v2 2>&1 && git checkout v2 2>&1 && git pull origin v2 2>&1 || true
+    cd \$SIEM_DIR && git fetch origin v2 2>&1 && git checkout v2 2>&1 && git pull origin v2 2>&1 || true
+    rm -f config.env docker-compose.override.yml 2>/dev/null || true
 
-    # Clean generated artifacts from prior install to prevent stale
-    # secrets/certs being reused with fresh Docker volumes
-    echo "Cleaning previous deployment artifacts..."
-    rm -f config.env 2>/dev/null || true
-    rm -f certs/graylog.crt certs/graylog.key certs/graylog.csr certs/ca.crt certs/ca.key certs/ca.srl 2>/dev/null || true
-    rm -f graylog/cacerts graylog/graylog.conf 2>/dev/null || true
-    rm -f docker-compose.override.yml 2>/dev/null || true
-
-    # Clean stale Docker state (containers + volumes from prior install)
-    echo "Removing stale Docker containers and volumes..."
-    docker compose --env-file config.env.template down -v 2>/dev/null || true
-    for c in plan-b-graylog plan-b-mongodb plan-b-opensearch plan-b-license-checker; do
+    # Clean stale containers
+    docker compose -f \$SIEM_DIR/docker-compose.windows.yml --env-file \$SIEM_DIR/config.env.template down -v 2>/dev/null || true
+    for c in plan-b-syslog plan-b-dashboard plan-b-opensearch plan-b-license-checker; do
         docker rm -f \$c 2>/dev/null || true
     done
     docker volume ls -q --filter name=plan-b-siem_ | xargs -r docker volume rm 2>/dev/null || true
 else
     echo "Cloning repository..."
-    git clone -b v2 https://github.com/plan-b-systems/siem-docker.git /opt/plan-b-siem 2>&1
+    git clone -b v2 https://github.com/plan-b-systems/siem-docker.git \$SIEM_DIR 2>&1
 fi
 
-cd /opt/plan-b-siem
+cd \$SIEM_DIR
 
-# Fix line endings (safety net)
+# Fix line endings
 find . -name '*.sh' -exec dos2unix -q {} \; 2>/dev/null || true
-find . -name '*.template' -exec dos2unix -q {} \; 2>/dev/null || true
-find . -name 'Dockerfile' -exec dos2unix -q {} \; 2>/dev/null || true
 dos2unix -q config.env.template 2>/dev/null || true
 
 # Generate config.env
 cp config.env.template config.env
-
 sed -i "s|^CLIENT_NAME=.*|CLIENT_NAME=$CLIENT_NAME|" config.env
 sed -i "s|^CLIENT_ID=.*|CLIENT_ID=$CLIENT_ID|" config.env
 sed -i "s|^HOST_IP=.*|HOST_IP=$HOST_IP|" config.env
@@ -361,38 +352,124 @@ sed -i "s|^TIMEZONE=.*|TIMEZONE=$TIMEZONE|" config.env
 sed -i "s|^RETENTION_DAYS=.*|RETENTION_DAYS=$RETENTION_DAYS|" config.env
 sed -i "s|^OPENSEARCH_HEAP_SIZE=.*|OPENSEARCH_HEAP_SIZE=$HEAP|" config.env
 sed -i "s|^DATA_PATH=.*|DATA_PATH=$DATA_PATH|" config.env
-
-# Fix line endings on generated config too
 dos2unix -q config.env 2>/dev/null || true
 
+# Generate JWT_SECRET
+JWT_SEC=\$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 64)
+echo "JWT_SECRET=\$JWT_SEC" >> config.env
 echo "config.env generated"
+
+# Host OS tuning for OpenSearch
+sysctl -w vm.max_map_count=262144 2>/dev/null || true
+if [ ! -f /etc/sysctl.d/99-plan-b-siem.conf ]; then
+    cat > /etc/sysctl.d/99-plan-b-siem.conf <<'SYSCTL'
+vm.max_map_count=262144
+net.core.rmem_max=26214400
+net.core.rmem_default=262144
+SYSCTL
+fi
+
 echo "DONE"
 "@
 
-# Write script to temp file and execute (piping into wsl.exe is unreliable)
 $tmpScript = "C:\PlanB-SIEM\tmp-setup.sh"
+New-Item -ItemType Directory -Path "C:\PlanB-SIEM" -Force | Out-Null
 [System.IO.File]::WriteAllText($tmpScript, $setupScript, (New-Object System.Text.UTF8Encoding $false))
 Start-WithProgress -Label "Cloning repo & configuring" -EstimatedSeconds 30 -Command "wsl.exe -d $DISTRO -u root -- bash -c `"sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-setup.sh && bash /mnt/c/PlanB-SIEM/tmp-setup.sh`""
 Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
 Write-Ok "Repository cloned and configured"
 
 # ============================================================
-# 7. Run install.sh
+# 7. Pull images and start SIEM stack
 # ============================================================
-Write-Step "Running SIEM Installer (this takes 5-10 minutes)"
+Write-Step "Pulling SIEM Images"
 
-$result = Start-WithProgress -Label "Building SIEM stack" -EstimatedSeconds 360 -Command "wsl.exe -d $DISTRO -u root -- bash -c 'cd /opt/plan-b-siem && chmod +x install.sh && ./install.sh 2>&1; echo EXIT_CODE=`$?'"
+Start-WithProgress -Label "Pulling Docker images" -EstimatedSeconds 90 -Command "wsl.exe -d $DISTRO -u root -- bash -c 'cd /opt/plan-b-siem && docker compose -f docker-compose.windows.yml --env-file config.env pull 2>&1'"
+Write-Ok "All images pulled"
 
-$exitLine = ($result | Select-String "EXIT_CODE=").ToString()
-$exitCode = [int]($exitLine -replace ".*EXIT_CODE=", "")
+Write-Step "Starting SIEM Stack"
 
-if ($exitCode -ne 0) {
-    Write-Err "install.sh failed with exit code $exitCode"
-    Write-Host "  Check the output above for errors." -ForegroundColor Yellow
-    Write-Host "  You can re-run: wsl -d $DISTRO -u root -- bash -c 'cd /opt/plan-b-siem && ./install.sh'" -ForegroundColor Yellow
+$startScript = @'
+#!/bin/bash
+set -e
+cd /opt/plan-b-siem
+
+# Ensure Docker is running
+if ! docker info &>/dev/null 2>&1; then
+    dockerd &>/var/log/dockerd.log &
+    sleep 5
+fi
+
+set -a; source config.env; set +a
+COMPOSE="docker compose -f docker-compose.windows.yml --env-file config.env"
+
+# Generate password hash using the dashboard image we just pulled
+RAW_PW=$(grep "^DASHBOARD_PASSWORD=" config.env | sed "s/^DASHBOARD_PASSWORD=//" | sed "s/^'//;s/'$//")
+echo "Generating password hash..."
+PW_HASH=$(docker run --rm ghcr.io/plan-b-systems/siem-dashboard:v2 \
+    node -e "const b=require('bcryptjs');console.log(b.hashSync(process.argv[1],12))" "$RAW_PW" 2>/dev/null | tail -1)
+
+if [[ -n "$PW_HASH" && "$PW_HASH" == \$2* ]]; then
+    sed -i '/^DASHBOARD_PASSWORD_HASH=/d' config.env
+    echo "DASHBOARD_PASSWORD_HASH='${PW_HASH}'" >> config.env
+    echo "Password hash generated"
+else
+    echo "WARNING: Could not generate password hash. Got: $PW_HASH"
+fi
+
+set -a; source config.env; set +a
+
+# Storage override
+if [[ -n "${DATA_PATH:-}" ]]; then
+    mkdir -p "${DATA_PATH}/opensearch"
+    chown -R 1000:1000 "${DATA_PATH}/opensearch"
+    cat > docker-compose.override.yml <<OVERRIDE
+services:
+  opensearch:
+    volumes:
+      - ${DATA_PATH}/opensearch:/usr/share/opensearch/data
+OVERRIDE
+fi
+
+# Start OpenSearch first, wait for healthy
+echo "Starting OpenSearch..."
+$COMPOSE up -d opensearch
+TIMEOUT=180; ELAPSED=0
+until $COMPOSE exec -T opensearch curl -sf http://localhost:9200/_cluster/health &>/dev/null; do
+    sleep 5; ELAPSED=$((ELAPSED+5))
+    [[ $ELAPSED -ge $TIMEOUT ]] && { echo "ERROR: OpenSearch failed to start within ${TIMEOUT}s"; exit 1; }
+    echo -n "."
+done
+echo ""
+echo "OpenSearch healthy"
+
+# Start remaining services
+echo "Starting syslog receiver and dashboard..."
+$COMPOSE up -d syslog-receiver dashboard
+sleep 5
+echo "Starting license checker..."
+$COMPOSE up -d license-checker
+
+# Setup resilience/auto-start
+if [[ -x resilience/setup-resilience.sh ]]; then
+    bash resilience/setup-resilience.sh "$(pwd)" 2>&1 || true
+fi
+
+echo "EXIT_CODE=0"
+'@
+
+$tmpScript = "C:\PlanB-SIEM\tmp-start.sh"
+[System.IO.File]::WriteAllText($tmpScript, $startScript, (New-Object System.Text.UTF8Encoding $false))
+$result = Start-WithProgress -Label "Starting SIEM services" -EstimatedSeconds 120 -Command "wsl.exe -d $DISTRO -u root -- bash -c `"sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-start.sh && bash /mnt/c/PlanB-SIEM/tmp-start.sh`""
+Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
+
+if ($result -match "EXIT_CODE=0") {
+    Write-Ok "SIEM stack running"
+} else {
+    Write-Err "SIEM stack failed to start. Check output above."
+    Write-Host "  Re-run: wsl -d $DISTRO -u root -- bash -c 'cd /opt/plan-b-siem && docker compose -f docker-compose.windows.yml --env-file config.env up -d'" -ForegroundColor Yellow
     exit 1
 }
-Write-Ok "SIEM stack installed"
 
 # ============================================================
 # 8. Windows Firewall Rules

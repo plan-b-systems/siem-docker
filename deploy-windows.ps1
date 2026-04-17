@@ -27,11 +27,12 @@ function Invoke-WslScript {
         [string]$Script,
         [string]$Label
     )
-    $tmpFile = "C:\PlanB-SIEM\tmp-$([System.IO.Path]::GetRandomFileName()).sh"
+    $tmpFile = "C:\PlanB-SIEM\tmp-script.sh"
+    $wslPath = "/mnt/c/PlanB-SIEM/tmp-script.sh"
     New-Item -ItemType Directory -Path "C:\PlanB-SIEM" -Force | Out-Null
     [System.IO.File]::WriteAllText($tmpFile, $Script, (New-Object System.Text.UTF8Encoding $false))
     Write-Ok "$Label..."
-    $result = wsl.exe -d $Distro -u root -- bash -c "sed -i 's/\r$//' '$($tmpFile -replace '\\','/' -replace 'C:','/mnt/c')' && bash '$($tmpFile -replace '\\','/' -replace 'C:','/mnt/c')'" 2>&1
+    $result = wsl.exe -d $Distro -u root -- bash -c "sed -i 's/\r$//' $wslPath && bash $wslPath" 2>&1
     $result | ForEach-Object { Write-Host "  $_" }
     Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
     return $result

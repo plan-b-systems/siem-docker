@@ -48,7 +48,7 @@ function Start-WithProgress {
         $bar = ($fillChar * $filled) + ($emptyChar * $empty)
         $mins = [math]::Floor($elapsed / 60)
         $secs = [math]::Floor($elapsed % 60)
-        if ($mins -gt 0) { $timeStr = "${mins}m $($secs.ToString('D2'))s" } else { $timeStr = "${secs}s" }
+        if ($mins -gt 0) { $timeStr = "${mins}m $([int]$secs)s" } else { $timeStr = "$([int]$secs)s" }
         Write-Host "`r  $Label [$bar] ${pct}% ($timeStr)  " -NoNewline -ForegroundColor Yellow
         Start-Sleep -Milliseconds 500
     }

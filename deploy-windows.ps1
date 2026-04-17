@@ -227,30 +227,30 @@ Write-Ok "Docker environment ready"
 # ============================================================
 Write-Step "Setting Up SIEM"
 
-$setupScript = @"
+$setupScript = @'
 #!/bin/bash
 set -e
 
 SIEM_DIR=/opt/plan-b-siem
 
 # Clone or update repo (needed for compose file, resilience scripts, config template)
-if [ -d \$SIEM_DIR/.git ]; then
+if [ -d $SIEM_DIR/.git ]; then
     echo "Repo exists, pulling latest..."
-    cd \$SIEM_DIR && git fetch origin v2 2>&1 && git checkout v2 2>&1 && git pull origin v2 2>&1 || true
+    cd $SIEM_DIR && git fetch origin v2 2>&1 && git checkout v2 2>&1 && git pull origin v2 2>&1 || true
     rm -f config.env docker-compose.override.yml 2>/dev/null || true
 
     # Clean stale containers
-    docker compose -f \$SIEM_DIR/docker-compose.windows.yml --env-file \$SIEM_DIR/config.env.template down -v 2>/dev/null || true
+    docker compose -f $SIEM_DIR/docker-compose.windows.yml --env-file $SIEM_DIR/config.env.template down -v 2>/dev/null || true
     for c in plan-b-syslog plan-b-dashboard plan-b-opensearch plan-b-license-checker; do
-        docker rm -f \$c 2>/dev/null || true
+        docker rm -f $c 2>/dev/null || true
     done
     docker volume ls -q --filter name=plan-b-siem_ | xargs -r docker volume rm 2>/dev/null || true
 else
     echo "Cloning repository..."
-    git clone -b v2 https://github.com/plan-b-systems/siem-docker.git \$SIEM_DIR 2>&1
+    git clone -b v2 https://github.com/plan-b-systems/siem-docker.git $SIEM_DIR 2>&1
 fi
 
-cd \$SIEM_DIR
+cd $SIEM_DIR
 
 # Fix line endings
 find . -name '*.sh' -exec dos2unix -q {} \; 2>/dev/null || true
@@ -258,19 +258,19 @@ dos2unix -q config.env.template 2>/dev/null || true
 
 # Generate config.env
 cp config.env.template config.env
-sed -i "s|^CLIENT_NAME=.*|CLIENT_NAME=$CLIENT_NAME|" config.env
-sed -i "s|^CLIENT_ID=.*|CLIENT_ID=$CLIENT_ID|" config.env
-sed -i "s|^HOST_IP=.*|HOST_IP=$HOST_IP|" config.env
-sed -i "s|^DASHBOARD_PASSWORD=.*|DASHBOARD_PASSWORD='$ADMIN_PASSWORD'|" config.env
-sed -i "s|^TIMEZONE=.*|TIMEZONE=$TIMEZONE|" config.env
-sed -i "s|^RETENTION_DAYS=.*|RETENTION_DAYS=$RETENTION_DAYS|" config.env
-sed -i "s|^OPENSEARCH_HEAP_SIZE=.*|OPENSEARCH_HEAP_SIZE=$HEAP|" config.env
-sed -i "s|^DATA_PATH=.*|DATA_PATH=$DATA_PATH|" config.env
+sed -i "s|^CLIENT_NAME=.*|CLIENT_NAME=__CLIENT_NAME__|" config.env
+sed -i "s|^CLIENT_ID=.*|CLIENT_ID=__CLIENT_ID__|" config.env
+sed -i "s|^HOST_IP=.*|HOST_IP=__HOST_IP__|" config.env
+sed -i "s|^DASHBOARD_PASSWORD=.*|DASHBOARD_PASSWORD='__ADMIN_PASSWORD__'|" config.env
+sed -i "s|^TIMEZONE=.*|TIMEZONE=__TIMEZONE__|" config.env
+sed -i "s|^RETENTION_DAYS=.*|RETENTION_DAYS=__RETENTION_DAYS__|" config.env
+sed -i "s|^OPENSEARCH_HEAP_SIZE=.*|OPENSEARCH_HEAP_SIZE=__HEAP__|" config.env
+sed -i "s|^DATA_PATH=.*|DATA_PATH=__DATA_PATH__|" config.env
 dos2unix -q config.env 2>/dev/null || true
 
 # Generate JWT_SECRET
-JWT_SEC=`$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 64)
-echo "JWT_SECRET=`$JWT_SEC" >> config.env
+JWT_SEC=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 64)
+echo "JWT_SECRET=$JWT_SEC" >> config.env
 echo "config.env generated"
 
 # Host OS tuning for OpenSearch
@@ -284,7 +284,17 @@ SYSCTL
 fi
 
 echo "DONE"
-"@
+'@
+
+# Inject user variables into the script (single-quoted heredoc can't expand PS vars)
+$setupScript = $setupScript -replace '__CLIENT_NAME__', $CLIENT_NAME
+$setupScript = $setupScript -replace '__CLIENT_ID__', $CLIENT_ID
+$setupScript = $setupScript -replace '__HOST_IP__', $HOST_IP
+$setupScript = $setupScript -replace '__ADMIN_PASSWORD__', ($ADMIN_PASSWORD -replace "'", "'\''")
+$setupScript = $setupScript -replace '__TIMEZONE__', $TIMEZONE
+$setupScript = $setupScript -replace '__RETENTION_DAYS__', $RETENTION_DAYS
+$setupScript = $setupScript -replace '__HEAP__', $HEAP
+$setupScript = $setupScript -replace '__DATA_PATH__', $DATA_PATH
 
 Invoke-WslScript -Distro $DISTRO -Script $setupScript -Label "Cloning repo & configuring"
 Write-Ok "Repository cloned and configured"

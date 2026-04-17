@@ -31,16 +31,19 @@ function Start-WithProgress {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $barWidth = 30
 
+    $fillChar = [string][char]0x2588
+    $emptyChar = [string][char]0x2591
+
     while ($job.State -eq 'Running') {
         $elapsed = $sw.Elapsed.TotalSeconds
         $pct = [math]::Min(95, [math]::Floor(($elapsed / $EstimatedSeconds) * 100))
         $filled = [math]::Floor($barWidth * $pct / 100)
         $empty = $barWidth - $filled
-        $bar = ("{0}{1}" -f ([char]0x2588).ToString() * $filled, ([char]0x2591).ToString() * $empty)
+        $bar = ($fillChar * $filled) + ($emptyChar * $empty)
         $mins = [math]::Floor($elapsed / 60)
         $secs = [math]::Floor($elapsed % 60)
-        $timeStr = if ($mins -gt 0) { "{0}m {1:D2}s" -f $mins, $secs } else { "{0}s" -f $secs }
-        Write-Host ("`r  $Label [$bar] ${pct}% ($timeStr)  ") -NoNewline -ForegroundColor Yellow
+        if ($mins -gt 0) { $timeStr = "${mins}m $($secs.ToString('D2'))s" } else { $timeStr = "${secs}s" }
+        Write-Host "`r  $Label [$bar] ${pct}% ($timeStr)  " -NoNewline -ForegroundColor Yellow
         Start-Sleep -Milliseconds 500
     }
 
@@ -49,8 +52,8 @@ function Start-WithProgress {
     $sw.Stop()
 
     $total = [math]::Floor($sw.Elapsed.TotalSeconds)
-    $bar = ([char]0x2588).ToString() * $barWidth
-    Write-Host ("`r  $Label [$bar] 100% (${total}s)     ") -ForegroundColor Green
+    $bar = $fillChar * $barWidth
+    Write-Host "`r  $Label [$bar] 100% (${total}s)     " -ForegroundColor Green
     return $result
 }
 

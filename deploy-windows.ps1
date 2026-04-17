@@ -20,45 +20,20 @@ function Write-Ok    { param($msg) Write-Host "  [OK]    $msg" -ForegroundColor 
 function Write-Warn  { param($msg) Write-Host "  [WARN]  $msg" -ForegroundColor Yellow }
 function Write-Err   { param($msg) Write-Host "  [ERROR] $msg" -ForegroundColor Red }
 
-# -- Progress bar for long-running commands --
-# Runs the command as a System.Diagnostics.Process so WSL/docker calls work.
-# $Command is a string (not scriptblock) that gets passed to powershell -Command.
-function Start-WithProgress {
+# -- Helper: run a WSL bash script from a temp file, stream output --
+function Invoke-WslScript {
     param(
-        [string]$Label,
-        [string]$Command,
-        [int]$EstimatedSeconds = 120
+        [string]$Distro,
+        [string]$Script,
+        [string]$Label
     )
-    # Launch as a child powershell process — inherits environment, WSL works
-    $outFile = "$env:TEMP\plan-b-progress-$([System.IO.Path]::GetRandomFileName()).txt"
-    $proc = Start-Process -FilePath "powershell.exe" `
-        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"$Command | Out-File -FilePath '$outFile' -Encoding utf8`"" `
-        -WindowStyle Hidden -PassThru
-
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $barWidth = 30
-    $fillChar = [string][char]0x2588
-    $emptyChar = [string][char]0x2591
-
-    while (-not $proc.HasExited) {
-        $elapsed = $sw.Elapsed.TotalSeconds
-        $pct = [math]::Min(95, [math]::Floor(($elapsed / $EstimatedSeconds) * 100))
-        $filled = [math]::Floor($barWidth * $pct / 100)
-        $empty = $barWidth - $filled
-        $bar = ($fillChar * $filled) + ($emptyChar * $empty)
-        $mins = [math]::Floor($elapsed / 60)
-        $secs = [math]::Floor($elapsed % 60)
-        if ($mins -gt 0) { $timeStr = "${mins}m $([int]$secs)s" } else { $timeStr = "$([int]$secs)s" }
-        Write-Host "`r  $Label [$bar] ${pct}% ($timeStr)  " -NoNewline -ForegroundColor Yellow
-        Start-Sleep -Milliseconds 500
-    }
-    $sw.Stop()
-
-    $total = [math]::Floor($sw.Elapsed.TotalSeconds)
-    $bar = $fillChar * $barWidth
-    Write-Host "`r  $Label [$bar] 100% (${total}s)     " -ForegroundColor Green
-
-    $result = if (Test-Path $outFile) { Get-Content $outFile -Raw; Remove-Item $outFile -Force } else { "" }
+    $tmpFile = "C:\PlanB-SIEM\tmp-$([System.IO.Path]::GetRandomFileName()).sh"
+    New-Item -ItemType Directory -Path "C:\PlanB-SIEM" -Force | Out-Null
+    [System.IO.File]::WriteAllText($tmpFile, $Script, (New-Object System.Text.UTF8Encoding $false))
+    Write-Ok "$Label..."
+    $result = wsl.exe -d $Distro -u root -- bash -c "sed -i 's/\r$//' '$($tmpFile -replace '\\','/' -replace 'C:','/mnt/c')' && bash '$($tmpFile -replace '\\','/' -replace 'C:','/mnt/c')'" 2>&1
+    $result | ForEach-Object { Write-Host "  $_" }
+    Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
     return $result
 }
 
@@ -310,11 +285,7 @@ fi
 echo "DONE"
 "@
 
-$tmpScript = "C:\PlanB-SIEM\tmp-setup.sh"
-New-Item -ItemType Directory -Path "C:\PlanB-SIEM" -Force | Out-Null
-[System.IO.File]::WriteAllText($tmpScript, $setupScript, (New-Object System.Text.UTF8Encoding $false))
-Start-WithProgress -Label "Cloning repo & configuring" -EstimatedSeconds 30 -Command "wsl.exe -d $DISTRO -u root -- bash -c `"sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-setup.sh && bash /mnt/c/PlanB-SIEM/tmp-setup.sh`""
-Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
+Invoke-WslScript -Distro $DISTRO -Script $setupScript -Label "Cloning repo & configuring"
 Write-Ok "Repository cloned and configured"
 
 # ============================================================
@@ -322,7 +293,8 @@ Write-Ok "Repository cloned and configured"
 # ============================================================
 Write-Step "Pulling SIEM Images"
 
-Start-WithProgress -Label "Pulling Docker images" -EstimatedSeconds 90 -Command "wsl.exe -d $DISTRO -u root -- bash -c 'cd /opt/plan-b-siem && docker compose -f docker-compose.windows.yml --env-file config.env pull 2>&1'"
+Write-Ok "Pulling Docker images..."
+wsl.exe -d $DISTRO -u root -- bash -c "cd /opt/plan-b-siem && docker compose -f docker-compose.windows.yml --env-file config.env pull 2>&1" | ForEach-Object { Write-Host "  $_" }
 Write-Ok "All images pulled"
 
 Write-Step "Starting SIEM Stack"
@@ -396,10 +368,7 @@ fi
 echo "EXIT_CODE=0"
 '@
 
-$tmpScript = "C:\PlanB-SIEM\tmp-start.sh"
-[System.IO.File]::WriteAllText($tmpScript, $startScript, (New-Object System.Text.UTF8Encoding $false))
-$result = Start-WithProgress -Label "Starting SIEM services" -EstimatedSeconds 120 -Command "wsl.exe -d $DISTRO -u root -- bash -c `"sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-start.sh && bash /mnt/c/PlanB-SIEM/tmp-start.sh`""
-Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
+$result = Invoke-WslScript -Distro $DISTRO -Script $startScript -Label "Starting SIEM services"
 
 if ($result -match "EXIT_CODE=0") {
     Write-Ok "SIEM stack running"

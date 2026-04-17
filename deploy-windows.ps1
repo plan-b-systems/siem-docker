@@ -277,9 +277,9 @@ if ! docker info &>/dev/null 2>&1; then
 fi
 
 # Clone or update
-if [ -d /opt/plansb-siem/.git ]; then
+if [ -d /opt/plan-b-siem/.git ]; then
     echo "Repo exists, pulling latest..."
-    cd /opt/plansb-siem && git fetch origin v2 2>&1 && git checkout v2 2>&1 && git pull origin v2 2>&1 || true
+    cd /opt/plan-b-siem && git fetch origin v2 2>&1 && git checkout v2 2>&1 && git pull origin v2 2>&1 || true
 
     # Clean generated artifacts from prior install to prevent stale
     # secrets/certs being reused with fresh Docker volumes
@@ -292,16 +292,16 @@ if [ -d /opt/plansb-siem/.git ]; then
     # Clean stale Docker state (containers + volumes from prior install)
     echo "Removing stale Docker containers and volumes..."
     docker compose --env-file config.env.template down -v 2>/dev/null || true
-    for c in plansb-graylog plansb-mongodb plansb-opensearch plansb-license-checker; do
+    for c in plan-b-graylog plan-b-mongodb plan-b-opensearch plan-b-license-checker; do
         docker rm -f \$c 2>/dev/null || true
     done
-    docker volume ls -q --filter name=plansb-siem_ | xargs -r docker volume rm 2>/dev/null || true
+    docker volume ls -q --filter name=plan-b-siem_ | xargs -r docker volume rm 2>/dev/null || true
 else
     echo "Cloning repository..."
-    git clone -b v2 https://github.com/plan-b-systems/siem-docker.git /opt/plansb-siem 2>&1
+    git clone -b v2 https://github.com/plan-b-systems/siem-docker.git /opt/plan-b-siem 2>&1
 fi
 
-cd /opt/plansb-siem
+cd /opt/plan-b-siem
 
 # Fix line endings (safety net)
 find . -name '*.sh' -exec dos2unix -q {} \; 2>/dev/null || true
@@ -340,7 +340,7 @@ Write-Ok "Repository cloned and configured"
 # ============================================================
 Write-Step "Running SIEM Installer (this takes 5-10 minutes)"
 
-$result = wsl.exe -d $DISTRO -u root -- bash -c "cd /opt/plansb-siem && chmod +x install.sh && ./install.sh 2>&1; echo EXIT_CODE=`$?" 2>&1
+$result = wsl.exe -d $DISTRO -u root -- bash -c "cd /opt/plan-b-siem && chmod +x install.sh && ./install.sh 2>&1; echo EXIT_CODE=`$?" 2>&1
 $result | ForEach-Object { Write-Host "  $_" }
 
 $exitLine = ($result | Select-String "EXIT_CODE=").ToString()
@@ -349,7 +349,7 @@ $exitCode = [int]($exitLine -replace ".*EXIT_CODE=", "")
 if ($exitCode -ne 0) {
     Write-Err "install.sh failed with exit code $exitCode"
     Write-Host "  Check the output above for errors." -ForegroundColor Yellow
-    Write-Host "  You can re-run: wsl -d $DISTRO -u root -- bash -c 'cd /opt/plansb-siem && ./install.sh'" -ForegroundColor Yellow
+    Write-Host "  You can re-run: wsl -d $DISTRO -u root -- bash -c 'cd /opt/plan-b-siem && ./install.sh'" -ForegroundColor Yellow
     exit 1
 }
 Write-Ok "SIEM stack installed"
@@ -408,13 +408,13 @@ $installDir = "C:\PlanB-SIEM"
 New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 
 # Copy from repo
-$psSource = "\\wsl$\$DISTRO\opt\plansb-siem\resilience\windows"
+$psSource = "\\wsl$\$DISTRO\opt\plan-b-siem\resilience\windows"
 if (Test-Path "$psSource\PlanB-SIEM-Startup.ps1") {
     Copy-Item "$psSource\PlanB-SIEM-Startup.ps1" "$installDir\" -Force
     Copy-Item "$psSource\Register-ScheduledTask.ps1" "$installDir\" -Force
 } else {
     # Fallback: copy via wsl
-    wsl.exe -d $DISTRO -u root -- bash -c "cp /opt/plansb-siem/resilience/windows/*.ps1 /mnt/c/PlanB-SIEM/" 2>&1 | Out-Null
+    wsl.exe -d $DISTRO -u root -- bash -c "cp /opt/plan-b-siem/resilience/windows/*.ps1 /mnt/c/PlanB-SIEM/" 2>&1 | Out-Null
 }
 
 # Register the task
@@ -450,7 +450,7 @@ Write-Ok "Auto-start scheduled task registered"
 Write-Step "Final Health Check"
 
 Start-Sleep -Seconds 5
-$healthResult = wsl.exe -d $DISTRO -u root -- bash -c "/opt/plansb-siem/resilience/health-check.sh 2>&1" 2>&1
+$healthResult = wsl.exe -d $DISTRO -u root -- bash -c "/opt/plan-b-siem/resilience/health-check.sh 2>&1" 2>&1
 $healthResult | ForEach-Object { Write-Host "  $_" }
 
 # ============================================================
@@ -459,10 +459,10 @@ $healthResult | ForEach-Object { Write-Host "  $_" }
 Write-Step "Certificate"
 
 $desktopPath = [Environment]::GetFolderPath("Desktop")
-$caCertDest = Join-Path $desktopPath "plansb-ca.crt"
-wsl.exe -d $DISTRO -- bash -c "cat /opt/plansb-siem/certs/ca.crt" 2>&1 | Set-Content -Path $caCertDest
+$caCertDest = Join-Path $desktopPath "plan-b-ca.crt"
+wsl.exe -d $DISTRO -- bash -c "cat /opt/plan-b-siem/certs/ca.crt" 2>&1 | Set-Content -Path $caCertDest
 if (Test-Path $caCertDest) {
-    Write-Ok "CA certificate copied to Desktop: plansb-ca.crt"
+    Write-Ok "CA certificate copied to Desktop: plan-b-ca.crt"
     Write-Host "  Double-click it -> Install -> Local Machine -> Trusted Root Certification Authorities" -ForegroundColor Yellow
 }
 
@@ -482,7 +482,7 @@ Write-Host "  Client ID   : $CLIENT_ID" -ForegroundColor Gray
 Write-Host "  Retention   : $RETENTION_DAYS days" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Logs        : C:\PlanB-SIEM\startup.log (Windows)" -ForegroundColor Gray
-Write-Host "                /var/log/plansb-siem-startup.log (WSL)" -ForegroundColor Gray
+Write-Host "                /var/log/plan-b-siem-startup.log (WSL)" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  CA cert on Desktop - import to remove browser warning" -ForegroundColor Yellow
 Write-Host ""

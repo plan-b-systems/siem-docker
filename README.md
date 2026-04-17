@@ -65,8 +65,8 @@ apt-get install -y docker-compose-plugin gettext-base openssl git
 ### 2. Clone the stack to the target machine
 
 ```bash
-git clone https://github.com/plan-b-systems/siem-docker.git /opt/plansb-siem
-cd /opt/plansb-siem
+git clone https://github.com/plan-b-systems/siem-docker.git /opt/plan-b-siem
+cd /opt/plan-b-siem
 ```
 
 ### 3. Configure for this client
@@ -209,9 +209,9 @@ GRACE_PERIOD                                       EXPIRED
 
 > MongoDB is **never** stopped so that existing log data is preserved.
 
-License check logs: `docker exec plansb-license-checker cat /data/license_checker.log`
+License check logs: `docker exec plan-b-license-checker cat /data/license_checker.log`
 
-State file: `docker exec plansb-license-checker cat /data/license_state.json`
+State file: `docker exec plan-b-license-checker cat /data/license_state.json`
 
 ---
 
@@ -244,7 +244,7 @@ sudo ./reconfigure.sh
 df -h /mnt/siem-data
 
 # Check OpenSearch index sizes
-docker exec plansb-opensearch curl -s localhost:9200/_cat/indices?v
+docker exec plan-b-opensearch curl -s localhost:9200/_cat/indices?v
 ```
 
 ---
@@ -283,14 +283,14 @@ docker exec plansb-opensearch curl -s localhost:9200/_cat/indices?v
 docker compose --env-file config.env stop graylog opensearch
 
 # Dump MongoDB
-docker exec plansb-mongodb mongodump --archive | gzip > backup-mongodb-$(date +%F).gz
+docker exec plan-b-mongodb mongodump --archive | gzip > backup-mongodb-$(date +%F).gz
 
 # Snapshot OpenSearch data
 # If using DATA_PATH:
 tar czf backup-opensearch-$(date +%F).tar.gz -C ${DATA_PATH:-/var/lib/docker/volumes} opensearch
 
 # If using Docker named volumes:
-docker run --rm -v plansb_opensearch-data:/data -v $(pwd):/backup \
+docker run --rm -v plan-b_opensearch-data:/data -v $(pwd):/backup \
     busybox tar czf /backup/backup-opensearch-$(date +%F).tar.gz /data
 
 # Restart
@@ -300,7 +300,7 @@ docker compose --env-file config.env start opensearch graylog
 ### Restore MongoDB
 
 ```bash
-gzip -dc backup-mongodb-YYYY-MM-DD.gz | docker exec -i plansb-mongodb mongorestore --archive
+gzip -dc backup-mongodb-YYYY-MM-DD.gz | docker exec -i plan-b-mongodb mongorestore --archive
 ```
 
 ---
@@ -312,22 +312,22 @@ gzip -dc backup-mongodb-YYYY-MM-DD.gz | docker exec -i plansb-mongodb mongoresto
 docker compose --env-file config.env logs graylog | grep -i error
 # Common fix: delete corrupt journal
 docker compose --env-file config.env stop graylog
-docker volume rm plansb_graylog-journal
+docker volume rm plan-b_graylog-journal
 docker compose --env-file config.env up -d graylog
 ```
 
 **OpenSearch out of disk space**
 ```bash
 # Check disk usage
-docker exec plansb-opensearch curl -s localhost:9200/_cat/indices?v
+docker exec plan-b-opensearch curl -s localhost:9200/_cat/indices?v
 # Manually delete oldest index
-docker exec plansb-opensearch curl -s -X DELETE localhost:9200/graylog_0
+docker exec plan-b-opensearch curl -s -X DELETE localhost:9200/graylog_0
 ```
 
 **License checker shows EXPIRED but license is renewed**
 ```bash
 # Force immediate re-check
-docker restart plansb-license-checker
+docker restart plan-b-license-checker
 ```
 
 **TLS certificate expired**

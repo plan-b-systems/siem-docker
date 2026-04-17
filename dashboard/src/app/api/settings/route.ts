@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { config } from '@/lib/config'
 
 const OS_URL = config.opensearchUrl
-const SETTINGS_INDEX = 'plansb-settings'
+const SETTINGS_INDEX = 'plan-b-settings'
 const DOC_ID = 'config'
 
 async function osRequest(method: string, path: string, body?: unknown) {

@@ -121,7 +121,7 @@ if [[ $CURRENT_MAP -lt 262144 ]]; then
     info "Set vm.max_map_count=262144"
 fi
 
-SYSCTL_CONF="/etc/sysctl.d/99-plansb-siem.conf"
+SYSCTL_CONF="/etc/sysctl.d/99-plan-b-siem.conf"
 if [[ ! -f "$SYSCTL_CONF" ]]; then
     cat > "$SYSCTL_CONF" <<'EOF'
 vm.max_map_count=262144
@@ -136,14 +136,14 @@ fi
 # ════════════════════════════════════════════════════════════
 step "Preparing Docker images"
 
-if docker ps -a --format '{{.Names}}' | grep -q "^plansb-"; then
+if docker ps -a --format '{{.Names}}' | grep -q "^plan-b-"; then
     info "Removing stale containers from prior install …"
     docker compose --env-file config.env down -v 2>/dev/null || true
-    for c in plansb-syslog plansb-dashboard plansb-opensearch plansb-license-checker plansb-graylog plansb-mongodb; do
+    for c in plan-b-syslog plan-b-dashboard plan-b-opensearch plan-b-license-checker plan-b-graylog plan-b-mongodb; do
         docker rm -f "$c" 2>/dev/null || true
     done
 fi
-docker volume ls -q --filter name=plansb-siem_ | while read -r vol; do
+docker volume ls -q --filter name=plan-b-siem_ | while read -r vol; do
     docker volume rm "$vol" 2>/dev/null || true
 done
 
@@ -160,15 +160,15 @@ if ! grep -q "^DASHBOARD_PASSWORD_HASH=" config.env 2>/dev/null || \
     RAW_PW=$(grep "^DASHBOARD_PASSWORD=" config.env | sed "s/^DASHBOARD_PASSWORD=//" | sed "s/^'//;s/'$//")
 
     # Write a temp JS file to avoid shell escaping issues
-    cat > /tmp/plansb-genhash.js << 'JSEOF'
+    cat > /tmp/plan-b-genhash.js << 'JSEOF'
 const bcrypt = require('bcryptjs');
 const pw = process.argv[2] || 'changeme';
 console.log(bcrypt.hashSync(pw, 12));
 JSEOF
 
-    PW_HASH=$(docker run --rm -v /tmp/plansb-genhash.js:/tmp/genhash.js -w /tmp \
+    PW_HASH=$(docker run --rm -v /tmp/plan-b-genhash.js:/tmp/genhash.js -w /tmp \
         node:22-alpine sh -c "npm init -y >/dev/null 2>&1 && npm install bcryptjs >/dev/null 2>&1 && node /tmp/genhash.js '${RAW_PW}'" 2>/dev/null | tail -1)
-    rm -f /tmp/plansb-genhash.js
+    rm -f /tmp/plan-b-genhash.js
 
     if [[ -n "$PW_HASH" && "$PW_HASH" == \$2* ]]; then
         sed -i '/^#\s*DASHBOARD_PASSWORD_HASH=/d' config.env
@@ -219,7 +219,7 @@ grep -qi microsoft /proc/version 2>/dev/null && IS_WSL2=true
 if $IS_WSL2 && [[ -x "${SCRIPT_DIR}/resilience/setup-resilience.sh" ]]; then
     bash "${SCRIPT_DIR}/resilience/setup-resilience.sh" "${SCRIPT_DIR}"
 else
-    cat > /etc/systemd/system/plansb-siem.service <<UNIT
+    cat > /etc/systemd/system/plan-b-siem.service <<UNIT
 [Unit]
 Description=Plan-B Systems SIEM v2
 After=docker.service network-online.target
@@ -237,7 +237,7 @@ TimeoutStartSec=300
 WantedBy=multi-user.target
 UNIT
     systemctl daemon-reload
-    systemctl enable plansb-siem.service
+    systemctl enable plan-b-siem.service
     info "systemd service enabled"
 fi
 

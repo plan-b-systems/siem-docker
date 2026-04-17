@@ -117,7 +117,7 @@ info "Docker is running"
 # ════════════════════════════════════════════════════════════
 step "Cloning SIEM v2 Repository"
 
-INSTALL_DIR="/opt/plansb-siem"
+INSTALL_DIR="/opt/plan-b-siem"
 
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
     info "Repo exists, cleaning and updating..."

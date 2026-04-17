@@ -32,10 +32,10 @@
 ## 2. v2 Stack Architecture
 
 **Decision:** 4-container stack:
-1. `plansb-opensearch` — OpenSearch 2.18 (log storage, unchanged)
-2. `plansb-syslog` — Node.js syslog receiver (adapted from cloud)
-3. `plansb-dashboard` — Next.js branded dashboard (new)
-4. `plansb-license` — License checker (updated targets)
+1. `plan-b-opensearch` — OpenSearch 2.18 (log storage, unchanged)
+2. `plan-b-syslog` — Node.js syslog receiver (adapted from cloud)
+3. `plan-b-dashboard` — Next.js branded dashboard (new)
+4. `plan-b-license` — License checker (updated targets)
 
 **Why:**
 - OpenSearch is proven, already in production, handles search/aggregation well
@@ -43,7 +43,7 @@
 - Next.js matches our cloud SIEM tech stack — same components, same patterns, team already knows it
 - License checker already exists and works — just needs target container name changes
 
-**Container naming:** Prefix `plansb-` = Plan-B Systems (consistent with v1 naming convention: plansb-graylog, plansb-opensearch, etc.)
+**Container naming:** Prefix `plan-b-` = Plan-B Systems (consistent with v1 naming convention: plan-b-graylog, plan-b-opensearch, etc.)
 
 ---
 
@@ -86,12 +86,12 @@
 
 ## 5. Dashboard — Settings Storage in OpenSearch
 
-**Decision:** Store dashboard settings in an OpenSearch index (`plansb-settings`) with a single document.
+**Decision:** Store dashboard settings in an OpenSearch index (`plan-b-settings`) with a single document.
 
 **Why:**
 - OpenSearch is already running — no additional dependency
 - A single JSON document is all we need (language, timezone, retention, password hash, theme)
-- Simple GET/PUT to `plansb-settings/_doc/config`
+- Simple GET/PUT to `plan-b-settings/_doc/config`
 - No SQLite (adds a file mount and migration complexity)
 - No PostgreSQL (way overkill for a single config document)
 - No file-based config (harder to update from the UI, permission issues in containers)

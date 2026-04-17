@@ -2,7 +2,7 @@ import { SignJWT, jwtVerify } from 'jose'
 import { cookies } from 'next/headers'
 import { config } from './config'
 
-const JWT_COOKIE = 'plansb_session'
+const JWT_COOKIE = 'plan_b_session'
 const JWT_EXPIRY = '24h'
 
 function getSecret() {

@@ -21,9 +21,9 @@ for arg in "$@"; do
     esac
 done
 
-SIEM_DIR="/opt/plansb-siem"
-if [[ -f /etc/plansb-siem.conf ]]; then
-    source /etc/plansb-siem.conf
+SIEM_DIR="/opt/plan-b-siem"
+if [[ -f /etc/plan-b-siem.conf ]]; then
+    source /etc/plan-b-siem.conf
 fi
 
 pass() { $QUIET || echo -e "  ${GREEN}PASS${NC}  $*"; }
@@ -48,7 +48,7 @@ fi
 
 # ── 2. Containers running ──
 $QUIET || echo -e "\n${BOLD}Containers${NC}"
-CONTAINERS=(plansb-opensearch plansb-syslog plansb-dashboard plansb-license-checker)
+CONTAINERS=(plan-b-opensearch plan-b-syslog plan-b-dashboard plan-b-license-checker)
 for cname in "${CONTAINERS[@]}"; do
     STATUS=$(docker inspect --format='{{.State.Status}}' "$cname" 2>/dev/null || echo "not found")
     HEALTH=$(docker inspect --format='{{.State.Health.Status}}' "$cname" 2>/dev/null || echo "none")
@@ -84,7 +84,7 @@ fi
 
 # ── 4. OpenSearch cluster ──
 $QUIET || echo -e "\n${BOLD}OpenSearch${NC}"
-OS_HEALTH=$(docker exec plansb-opensearch curl -s localhost:9200/_cluster/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null || echo "unreachable")
+OS_HEALTH=$(docker exec plan-b-opensearch curl -s localhost:9200/_cluster/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null || echo "unreachable")
 if [[ "$OS_HEALTH" == "green" ]]; then
     pass "OpenSearch cluster: green"
 elif [[ "$OS_HEALTH" == "yellow" ]]; then

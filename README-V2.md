@@ -10,22 +10,22 @@ On-premises SIEM with branded dashboard, AI-powered log analysis, and automated 
   Network Devices (syslog UDP:514 / TCP:1514)
                     │
   ┌─────────────────▼──────────────────┐
-  │  plansb-syslog (Node.js 22)        │  Parses RFC 3164/5424/FortiGate
+  │  plan-b-syslog (Node.js 22)        │  Parses RFC 3164/5424/FortiGate
   │  UDP:514 + TCP:1514                │  Writes directly to OpenSearch
   └─────────────────┬──────────────────┘
                     │
   ┌─────────────────▼──────────────────┐
-  │  plansb-opensearch (2.18.0)        │  Log storage + search
+  │  plan-b-opensearch (2.18.0)        │  Log storage + search
   │  ISM policy for 730-day retention  │  Internal network only
   └─────────────────┬──────────────────┘
                     │
   ┌─────────────────▼──────────────────┐
-  │  plansb-dashboard (Next.js 14)     │  Branded UI, dark theme
+  │  plan-b-dashboard (Next.js 14)     │  Branded UI, dark theme
   │  http://<IP>:3000                  │  HE/EN bilingual
   │  AI Chat (Claude API)              │
   └────────────────────────────────────┘
   ┌────────────────────────────────────┐
-  │  plansb-license (Python 3.12)      │  Daily license check
+  │  plan-b-license (Python 3.12)      │  Daily license check
   │  Delivers encrypted AI API key     │  Health reporting
   └────────────────────────────────────┘
 ```
@@ -159,13 +159,13 @@ When license is active and client has an AI tier:
 
 ```bash
 # View license status
-docker exec plansb-license-checker cat /data/license_state.json
+docker exec plan-b-license-checker cat /data/license_state.json
 
 # View AI key status
-docker exec plansb-dashboard cat /data/ai_key.json
+docker exec plan-b-dashboard cat /data/ai_key.json
 
 # Force re-check
-docker restart plansb-license-checker
+docker restart plan-b-license-checker
 ```
 
 ---
@@ -190,8 +190,8 @@ docker restart plansb-license-checker
 2. Verify logs appear in Dashboard → Forensics page
 
 ### 4. Enable AI (optional)
-1. Add `CLIENT_SECRET=<secret>` to `/opt/plansb-siem/config.env`
-2. Restart license checker: `docker restart plansb-license-checker`
+1. Add `CLIENT_SECRET=<secret>` to `/opt/plan-b-siem/config.env`
+2. Restart license checker: `docker restart plan-b-license-checker`
 3. AI Chat becomes available within 30 seconds
 
 ### 5. Verify
@@ -204,7 +204,7 @@ docker restart plansb-license-checker
 
 ## Configuration
 
-All settings in `/opt/plansb-siem/config.env`:
+All settings in `/opt/plan-b-siem/config.env`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -234,13 +234,13 @@ docker compose --env-file config.env ps
 docker compose --env-file config.env logs -f
 
 # Restart a service
-docker restart plansb-dashboard
+docker restart plan-b-dashboard
 
 # Check log count
-docker exec plansb-opensearch curl -s localhost:9200/logs-*/_count
+docker exec plan-b-opensearch curl -s localhost:9200/logs-*/_count
 
 # Check disk usage
-docker exec plansb-opensearch curl -s localhost:9200/_nodes/stats/fs | python3 -m json.tool
+docker exec plan-b-opensearch curl -s localhost:9200/_nodes/stats/fs | python3 -m json.tool
 
 # Health check
 ./resilience/health-check.sh

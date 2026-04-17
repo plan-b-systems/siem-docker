@@ -135,7 +135,7 @@ async function indexLog(parsed, sourceIP) {
 async function ensureIndexTemplate() {
   try {
     await osClient.indices.putTemplate({
-      name: 'plansb-logs',
+      name: 'plan-b-logs',
       body: {
         index_patterns: ['logs-*'],
         settings: {
@@ -162,7 +162,7 @@ async function ensureIndexTemplate() {
         },
       },
     });
-    console.log('[opensearch] Index template "plansb-logs" created');
+    console.log('[opensearch] Index template "plan-b-logs" created');
   } catch (err) {
     console.error(`[opensearch] Template error: ${err.message}`);
   }
@@ -170,7 +170,7 @@ async function ensureIndexTemplate() {
 
 // ── ISM Policy for retention ────────────────────────────
 async function ensureISMPolicy() {
-  const policyName = 'plansb-retention';
+  const policyName = 'plan-b-retention';
   try {
     // Check if policy exists
     let exists = false;

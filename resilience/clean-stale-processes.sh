@@ -6,7 +6,7 @@
 # ============================================================
 set -uo pipefail
 
-LOG_TAG="[plansb-clean]"
+LOG_TAG="[plan-b-clean]"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') ${LOG_TAG} $*"; }
 

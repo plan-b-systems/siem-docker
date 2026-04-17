@@ -21,7 +21,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  const token = request.cookies.get('plansb_session')?.value
+  const token = request.cookies.get('plan_b_session')?.value
   if (!token) {
     return NextResponse.redirect(new URL('/login', request.url))
   }

@@ -105,7 +105,7 @@ RESTART_LICENSE=true
 
 # OpenSearch heap change requires restart
 # We compare running env vs config (best effort)
-RUNNING_HEAP=$(docker inspect plansb-opensearch \
+RUNNING_HEAP=$(docker inspect plan-b-opensearch \
     --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
     | grep OPENSEARCH_JAVA_OPTS | grep -oP '\-Xmx\K[^ ]+' || echo "")
 CONFIG_HEAP="${OPENSEARCH_HEAP_SIZE:-2g}"

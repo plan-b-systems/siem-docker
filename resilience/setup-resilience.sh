@@ -45,11 +45,11 @@ info "SIEM directory: ${SIEM_DIR}"
 # ════════════════════════════════════════════════════════════
 step "Saving SIEM configuration"
 
-cat > /etc/plansb-siem.conf <<EOF
+cat > /etc/plan-b-siem.conf <<EOF
 # Plan-B Systems SIEM – install path (used by startup scripts)
 SIEM_DIR="${SIEM_DIR}"
 EOF
-info "Written /etc/plansb-siem.conf"
+info "Written /etc/plan-b-siem.conf"
 
 # ════════════════════════════════════════════════════════════
 # 2. Configure /etc/wsl.conf
@@ -88,12 +88,12 @@ info "Scripts marked executable"
 step "Installing systemd service"
 
 # Disable old service if present
-if systemctl is-enabled plansb-siem.service &>/dev/null; then
-    systemctl disable plansb-siem.service 2>/dev/null || true
-    info "Disabled old plansb-siem.service"
+if systemctl is-enabled plan-b-siem.service &>/dev/null; then
+    systemctl disable plan-b-siem.service 2>/dev/null || true
+    info "Disabled old plan-b-siem.service"
 fi
 
-cat > /etc/systemd/system/plansb-siem.service <<EOF
+cat > /etc/systemd/system/plan-b-siem.service <<EOF
 [Unit]
 Description=Plan-B Systems SIEM Stack
 After=docker.service network-online.target
@@ -114,7 +114,7 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable plansb-siem.service
+systemctl enable plan-b-siem.service
 info "systemd service installed and enabled"
 
 # ════════════════════════════════════════════════════════════
@@ -154,8 +154,8 @@ info "Copied PowerShell scripts to C:\\PlanB-SIEM\\"
 # ════════════════════════════════════════════════════════════
 step "Setting up health check cron"
 
-CRON_LINE="*/5 * * * * ${SIEM_DIR}/resilience/health-check.sh --quiet --fix >> /var/log/plansb-siem-health.log 2>&1"
-(crontab -l 2>/dev/null | grep -v "plansb.*health-check" || true; echo "$CRON_LINE") | crontab -
+CRON_LINE="*/5 * * * * ${SIEM_DIR}/resilience/health-check.sh --quiet --fix >> /var/log/plan-b-siem-health.log 2>&1"
+(crontab -l 2>/dev/null | grep -v "plan-b.*health-check" || true; echo "$CRON_LINE") | crontab -
 info "Health check cron installed (every 5 minutes with auto-fix)"
 
 # ════════════════════════════════════════════════════════════
@@ -170,8 +170,8 @@ echo -e "${NC}"
 echo ""
 echo -e "  ${BOLD}What was installed:${NC}"
 echo "  - /etc/wsl.conf         → systemd + boot startup script"
-echo "  - /etc/plansb-siem.conf → SIEM install path"
-echo "  - systemd service       → plansb-siem.service (with stale process cleanup)"
+echo "  - /etc/plan-b-siem.conf → SIEM install path"
+echo "  - systemd service       → plan-b-siem.service (with stale process cleanup)"
 echo "  - Cron job              → health check every 5 min with auto-fix"
 echo "  - C:\\PlanB-SIEM\\        → Windows startup + scheduled task scripts"
 echo ""
@@ -187,6 +187,6 @@ echo "  3. Reopen the Ubuntu terminal — everything should auto-start."
 echo ""
 echo -e "  ${BOLD}Verification:${NC}"
 echo -e "  - Run: ${BOLD}${SIEM_DIR}/resilience/health-check.sh${NC}"
-echo -e "  - Logs: ${BOLD}/var/log/plansb-siem-startup.log${NC}"
+echo -e "  - Logs: ${BOLD}/var/log/plan-b-siem-startup.log${NC}"
 echo -e "  - Win:  ${BOLD}C:\\PlanB-SIEM\\startup.log${NC}"
 echo ""

@@ -15,7 +15,7 @@ echo -e "${NC}"
 
 [[ $EUID -ne 0 ]] && { echo -e "${RED}ERROR: Run as root (sudo)${NC}"; exit 1; }
 
-INSTALL_DIR="/opt/plansb-siem"
+INSTALL_DIR="/opt/plan-b-siem"
 
 # Install git if missing
 command -v git &>/dev/null || {

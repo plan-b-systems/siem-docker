@@ -59,7 +59,7 @@ Write-Log "Waiting for SIEM containers..."
 $timeout = 300
 $elapsed = 0
 do {
-    $graylogStatus = (wsl.exe -d $distro -- docker inspect --format '{{.State.Health.Status}}' plansb-graylog 2>&1).Trim() -replace "`0", ""
+    $graylogStatus = (wsl.exe -d $distro -- docker inspect --format '{{.State.Health.Status}}' plan-b-graylog 2>&1).Trim() -replace "`0", ""
     if ($graylogStatus -eq "healthy") {
         Write-Log "Graylog is healthy"
         break

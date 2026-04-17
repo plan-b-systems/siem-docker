@@ -27,14 +27,14 @@ services:
   # ── OpenSearch ───────────────────────────────────────────
   opensearch:
     image: opensearchproject/opensearch:2.18.0
-    container_name: plansb-opensearch
+    container_name: plan-b-opensearch
     restart: unless-stopped
     networks:
       - siem-internal
     volumes:
       - opensearch-data:/usr/share/opensearch/data
     environment:
-      cluster.name: "plansb-cluster"
+      cluster.name: "plan-b-cluster"
       node.name: "opensearch-node1"
       discovery.type: "single-node"
       OPENSEARCH_JAVA_OPTS: "-Xms${OPENSEARCH_HEAP_SIZE:-2g} -Xmx${OPENSEARCH_HEAP_SIZE:-2g}"
@@ -74,8 +74,8 @@ services:
     build:
       context: ./syslog-receiver
       dockerfile: Dockerfile
-    image: plansb-syslog:latest
-    container_name: plansb-syslog
+    image: plan-b-syslog:latest
+    container_name: plan-b-syslog
     restart: unless-stopped
     networks:
       - siem-net       # external: receive syslog from network devices
@@ -112,8 +112,8 @@ services:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
-    image: plansb-dashboard:latest
-    container_name: plansb-dashboard
+    image: plan-b-dashboard:latest
+    container_name: plan-b-dashboard
     restart: unless-stopped
     networks:
       - siem-net       # external: web UI
@@ -158,8 +158,8 @@ services:
     build:
       context: ./license-checker
       dockerfile: Dockerfile
-    image: plansb-license-checker:latest
-    container_name: plansb-license-checker
+    image: plan-b-license-checker:latest
+    container_name: plan-b-license-checker
     restart: unless-stopped
     networks:
       - siem-net       # external: API calls to license server
@@ -177,9 +177,9 @@ services:
       CLIENT_ID: "${CLIENT_ID}"
       CLIENT_SECRET: "${CLIENT_SECRET:-}"
       GRACE_PERIOD_DAYS: "${GRACE_PERIOD_DAYS:-7}"
-      SYSLOG_CONTAINER: "plansb-syslog"
-      OPENSEARCH_CONTAINER: "plansb-opensearch"
-      DASHBOARD_CONTAINER: "plansb-dashboard"
+      SYSLOG_CONTAINER: "plan-b-syslog"
+      OPENSEARCH_CONTAINER: "plan-b-opensearch"
+      DASHBOARD_CONTAINER: "plan-b-dashboard"
       STATE_FILE: "/data/license_state.json"
       LOG_FILE: "/data/license_checker.log"
       AI_KEY_FILE: "/data/ai_key.json"

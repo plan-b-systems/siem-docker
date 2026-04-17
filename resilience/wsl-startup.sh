@@ -6,17 +6,17 @@
 # ============================================================
 set -uo pipefail
 
-LOG="/var/log/plansb-siem-startup.log"
+LOG="/var/log/plan-b-siem-startup.log"
 exec >> "$LOG" 2>&1
 
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [plansb-startup] $*"; }
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [plan-b-startup] $*"; }
 
 log "========== WSL boot detected =========="
 
 # Load SIEM install path
-SIEM_DIR="/opt/plansb-siem"
-if [[ -f /etc/plansb-siem.conf ]]; then
-    source /etc/plansb-siem.conf
+SIEM_DIR="/opt/plan-b-siem"
+if [[ -f /etc/plan-b-siem.conf ]]; then
+    source /etc/plan-b-siem.conf
 fi
 
 if [[ ! -f "${SIEM_DIR}/docker-compose.yml" ]]; then
@@ -25,8 +25,8 @@ if [[ ! -f "${SIEM_DIR}/docker-compose.yml" ]]; then
 fi
 
 # ── Apply sysctl tuning (WSL2 doesn't persist these across reboots) ──
-if [[ -f /etc/sysctl.d/99-plansb-siem.conf ]]; then
-    sysctl -p /etc/sysctl.d/99-plansb-siem.conf 2>/dev/null || true
+if [[ -f /etc/sysctl.d/99-plan-b-siem.conf ]]; then
+    sysctl -p /etc/sysctl.d/99-plan-b-siem.conf 2>/dev/null || true
     log "sysctl tuning applied"
 fi
 
@@ -85,7 +85,7 @@ log "Waiting for Graylog to become healthy..."
 TIMEOUT=300
 ELAPSED=0
 while [[ $ELAPSED -lt $TIMEOUT ]]; do
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' plansb-graylog 2>/dev/null || echo "unknown")
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' plan-b-graylog 2>/dev/null || echo "unknown")
     if [[ "$STATUS" == "healthy" ]]; then
         break
     fi

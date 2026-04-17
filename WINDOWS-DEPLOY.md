@@ -39,10 +39,10 @@ SIEM v2 runs inside WSL2 (Windows Subsystem for Linux) as a 4-container Docker s
 
 | Container | Purpose | Ports |
 |-----------|---------|-------|
-| `plansb-opensearch` | Log storage and search engine | Internal only |
-| `plansb-syslog` | Receives syslog from client devices | UDP 514, TCP 1514 |
-| `plansb-dashboard` | Web UI — log viewer, AI chat, threats | HTTP 3000 |
-| `plansb-license-checker` | License validation + AI key delivery | Internal only |
+| `plan-b-opensearch` | Log storage and search engine | Internal only |
+| `plan-b-syslog` | Receives syslog from client devices | UDP 514, TCP 1514 |
+| `plan-b-dashboard` | Web UI — log viewer, AI chat, threats | HTTP 3000 |
+| `plan-b-license-checker` | License validation + AI key delivery | Internal only |
 
 ---
 
@@ -148,7 +148,7 @@ If WSL2 networking is set to mirrored mode, the SIEM auto-starts when WSL boots.
 1. Open Ubuntu terminal
 2. Run:
 ```bash
-cd /opt/plansb-siem
+cd /opt/plan-b-siem
 docker compose up -d
 ```
 
@@ -158,19 +158,19 @@ docker compose up -d
 
 ```bash
 # Stack status
-docker compose -f /opt/plansb-siem/docker-compose.yml ps
+docker compose -f /opt/plan-b-siem/docker-compose.yml ps
 
 # Live logs
-docker compose -f /opt/plansb-siem/docker-compose.yml logs -f
+docker compose -f /opt/plan-b-siem/docker-compose.yml logs -f
 
 # Stop the stack
-docker compose -f /opt/plansb-siem/docker-compose.yml down
+docker compose -f /opt/plan-b-siem/docker-compose.yml down
 
 # Start the stack
-docker compose -f /opt/plansb-siem/docker-compose.yml up -d
+docker compose -f /opt/plan-b-siem/docker-compose.yml up -d
 
 # Check OpenSearch indices
-docker exec plansb-opensearch curl -s http://localhost:9200/_cat/indices?v
+docker exec plan-b-opensearch curl -s http://localhost:9200/_cat/indices?v
 ```
 
 ---
@@ -199,7 +199,7 @@ Then `wsl --shutdown` and reopen Ubuntu.
 **OpenSearch won't start**
 ```bash
 sudo sysctl -w vm.max_map_count=262144
-docker restart plansb-opensearch
+docker restart plan-b-opensearch
 ```
 
 ---

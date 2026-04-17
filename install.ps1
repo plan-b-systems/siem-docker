@@ -19,7 +19,7 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
 $installDir = "C:\PlanB-SIEM"
-$tempDir = "$env:TEMP\plansb-install-$(Get-Random)"
+$tempDir = "$env:TEMP\plan-b-install-$(Get-Random)"
 $zipUrl = "https://github.com/plan-b-systems/siem-docker/archive/refs/heads/v2.zip"
 $zipFile = "$tempDir\siem-docker.zip"
 

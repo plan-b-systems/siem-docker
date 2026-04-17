@@ -133,7 +133,7 @@ function getAiKey(): { apiKey: string; dailyBudget: number; tier: string } | nul
 async function getDailyUsage(): Promise<number> {
   const today = new Date().toISOString().split('T')[0]
   try {
-    const data = await osQuery('GET', `/plansb-ai-usage/_doc/${today}`)
+    const data = await osQuery('GET', `/plan-b-ai-usage/_doc/${today}`)
     return data._source?.count || 0
   } catch { return 0 }
 }
@@ -141,7 +141,7 @@ async function getDailyUsage(): Promise<number> {
 async function incrementDailyUsage(): Promise<void> {
   const today = new Date().toISOString().split('T')[0]
   try {
-    await osQuery('POST', `/plansb-ai-usage/_update/${today}`, {
+    await osQuery('POST', `/plan-b-ai-usage/_update/${today}`, {
       script: { source: 'ctx._source.count += 1', lang: 'painless' },
       upsert: { count: 1, date: today },
     })

@@ -46,9 +46,9 @@ STATE_FILE           = Path(os.environ.get("STATE_FILE",   "/data/license_state.
 LOG_FILE             = Path(os.environ.get("LOG_FILE",     "/data/license_checker.log"))
 AI_KEY_FILE          = Path(os.environ.get("AI_KEY_FILE",  "/data/ai_key.json"))
 TZ_NAME              = os.environ.get("TZ",                "UTC")
-SYSLOG_CONTAINER     = os.environ.get("SYSLOG_CONTAINER",     "plansb-syslog")
-OPENSEARCH_CONTAINER = os.environ.get("OPENSEARCH_CONTAINER", "plansb-opensearch")
-DASHBOARD_CONTAINER  = os.environ.get("DASHBOARD_CONTAINER",  "plansb-dashboard")
+SYSLOG_CONTAINER     = os.environ.get("SYSLOG_CONTAINER",     "plan-b-syslog")
+OPENSEARCH_CONTAINER = os.environ.get("OPENSEARCH_CONTAINER", "plan-b-opensearch")
+DASHBOARD_CONTAINER  = os.environ.get("DASHBOARD_CONTAINER",  "plan-b-dashboard")
 VERSION              = os.environ.get("VERSION",              "2.00")
 
 # ── State constants ──────────────────────────────────────────────────────
@@ -433,12 +433,12 @@ def report_ai_usage() -> None:
         if not container or container.status != "running":
             return
 
-        # Get current month's usage from the plansb-ai-usage index
+        # Get current month's usage from the plan-b-ai-usage index
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         period = today[:7]  # "2026-04"
 
         exit_code, output = container.exec_run(
-            f"curl -sf http://localhost:9200/plansb-ai-usage/_search?size=31",
+            f"curl -sf http://localhost:9200/plan-b-ai-usage/_search?size=31",
             demux=True
         )
         total_queries = 0

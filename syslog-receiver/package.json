@@ -1,5 +1,5 @@
 {
-  "name": "plansb-syslog-receiver",
+  "name": "plan-b-syslog-receiver",
   "version": "2.0.0",
   "description": "Plan-B Systems SIEM v2 — Syslog receiver with OpenSearch indexing",
   "main": "server.js",

@@ -20,6 +20,40 @@ function Write-Ok    { param($msg) Write-Host "  [OK]    $msg" -ForegroundColor 
 function Write-Warn  { param($msg) Write-Host "  [WARN]  $msg" -ForegroundColor Yellow }
 function Write-Err   { param($msg) Write-Host "  [ERROR] $msg" -ForegroundColor Red }
 
+# -- Progress bar for long-running background tasks --
+function Start-WithProgress {
+    param(
+        [string]$Label,
+        [scriptblock]$Task,
+        [int]$EstimatedSeconds = 120
+    )
+    $job = Start-Job -ScriptBlock $Task
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $barWidth = 30
+
+    while ($job.State -eq 'Running') {
+        $elapsed = $sw.Elapsed.TotalSeconds
+        $pct = [math]::Min(95, [math]::Floor(($elapsed / $EstimatedSeconds) * 100))
+        $filled = [math]::Floor($barWidth * $pct / 100)
+        $empty = $barWidth - $filled
+        $bar = ("{0}{1}" -f ([char]0x2588).ToString() * $filled, ([char]0x2591).ToString() * $empty)
+        $mins = [math]::Floor($elapsed / 60)
+        $secs = [math]::Floor($elapsed % 60)
+        $timeStr = if ($mins -gt 0) { "{0}m {1:D2}s" -f $mins, $secs } else { "{0}s" -f $secs }
+        Write-Host ("`r  $Label [$bar] ${pct}% ($timeStr)  ") -NoNewline -ForegroundColor Yellow
+        Start-Sleep -Milliseconds 500
+    }
+
+    $result = Receive-Job -Job $job
+    Remove-Job -Job $job -Force
+    $sw.Stop()
+
+    $total = [math]::Floor($sw.Elapsed.TotalSeconds)
+    $bar = ([char]0x2588).ToString() * $barWidth
+    Write-Host ("`r  $Label [$bar] 100% (${total}s)     ") -ForegroundColor Green
+    return $result
+}
+
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "  Plan-B Systems SIEM v2 - Windows Deployment" -ForegroundColor Cyan
@@ -151,8 +185,9 @@ $distros = (wsl.exe --list --quiet 2>&1) -replace "`0", "" | Where-Object { $_.T
 $ubuntuInstalled = $distros | Where-Object { $_ -match "Ubuntu" }
 
 if (-not $ubuntuInstalled) {
-    Write-Ok "Installing Ubuntu 24.04 (this takes a few minutes)..."
-    wsl --install -d Ubuntu-24.04 2>&1 | Out-Null
+    Start-WithProgress -Label "Installing Ubuntu 24.04" -EstimatedSeconds 180 -Task {
+        wsl --install -d Ubuntu-24.04 2>&1 | Out-Null
+    }
     Write-Warn "Ubuntu was just installed."
     Write-Warn "If an Ubuntu window opened, create a user account (e.g. planbadmin), then close it."
     Write-Host "  Press any key when Ubuntu setup is complete..." -ForegroundColor Yellow
@@ -257,7 +292,10 @@ $tmpScript = "C:\PlanB-SIEM\tmp-install.sh"
 New-Item -ItemType Directory -Path "C:\PlanB-SIEM" -Force | Out-Null
 # Use .NET to write UTF-8 without BOM (PS5 Set-Content -Encoding utf8 adds BOM)
 [System.IO.File]::WriteAllText($tmpScript, $installScript, (New-Object System.Text.UTF8Encoding $false))
-wsl.exe -d $DISTRO -u root -- bash -c "sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-install.sh && bash /mnt/c/PlanB-SIEM/tmp-install.sh" 2>&1 | ForEach-Object { Write-Host "  $_" }
+$distroForJob = $DISTRO
+Start-WithProgress -Label "Installing Docker & tools" -EstimatedSeconds 120 -Task {
+    wsl.exe -d $using:distroForJob -u root -- bash -c "sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-install.sh && bash /mnt/c/PlanB-SIEM/tmp-install.sh" 2>&1
+}
 Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
 Write-Ok "Docker and tools installed"
 
@@ -331,7 +369,9 @@ echo "DONE"
 # Write script to temp file and execute (piping into wsl.exe is unreliable)
 $tmpScript = "C:\PlanB-SIEM\tmp-setup.sh"
 [System.IO.File]::WriteAllText($tmpScript, $setupScript, (New-Object System.Text.UTF8Encoding $false))
-wsl.exe -d $DISTRO -u root -- bash -c "sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-setup.sh && bash /mnt/c/PlanB-SIEM/tmp-setup.sh" 2>&1 | ForEach-Object { Write-Host "  $_" }
+Start-WithProgress -Label "Cloning repo & configuring" -EstimatedSeconds 30 -Task {
+    wsl.exe -d $using:distroForJob -u root -- bash -c "sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-setup.sh && bash /mnt/c/PlanB-SIEM/tmp-setup.sh" 2>&1
+}
 Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
 Write-Ok "Repository cloned and configured"
 
@@ -340,8 +380,9 @@ Write-Ok "Repository cloned and configured"
 # ============================================================
 Write-Step "Running SIEM Installer (this takes 5-10 minutes)"
 
-$result = wsl.exe -d $DISTRO -u root -- bash -c "cd /opt/plan-b-siem && chmod +x install.sh && ./install.sh 2>&1; echo EXIT_CODE=`$?" 2>&1
-$result | ForEach-Object { Write-Host "  $_" }
+$result = Start-WithProgress -Label "Building SIEM stack" -EstimatedSeconds 360 -Task {
+    wsl.exe -d $using:distroForJob -u root -- bash -c "cd /opt/plan-b-siem && chmod +x install.sh && ./install.sh 2>&1; echo EXIT_CODE=`$?"
+}
 
 $exitLine = ($result | Select-String "EXIT_CODE=").ToString()
 $exitCode = [int]($exitLine -replace ".*EXIT_CODE=", "")

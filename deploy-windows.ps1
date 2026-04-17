@@ -291,8 +291,8 @@ sed -i "s|^DATA_PATH=.*|DATA_PATH=$DATA_PATH|" config.env
 dos2unix -q config.env 2>/dev/null || true
 
 # Generate JWT_SECRET
-JWT_SEC=\$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 64)
-echo "JWT_SECRET=\$JWT_SEC" >> config.env
+JWT_SEC=`$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 64)
+echo "JWT_SECRET=`$JWT_SEC" >> config.env
 echo "config.env generated"
 
 # Host OS tuning for OpenSearch

@@ -185,137 +185,73 @@ Write-Ok "WSL2 is installed"
 wsl --set-default-version 2 2>&1 | Out-Null
 
 # ============================================================
-# 3. Install Ubuntu 24.04
+# 3. Import Plan-B Docker WSL image
 # ============================================================
-Write-Step "Ubuntu 24.04"
+Write-Step "WSL2 Docker Environment"
 
+$DISTRO = "PlanB-SIEM"
+$wslDir = "C:\PlanB-SIEM\wsl"
+$rootfsUrl = "https://github.com/plan-b-systems/siem-docker/releases/download/wsl-image-v2/plan-b-docker-wsl.tar.gz"
+$rootfsFile = "$env:TEMP\plan-b-docker-wsl.tar.gz"
+
+# Check if our distro already exists
 $distros = (wsl.exe --list --quiet 2>&1) -replace "`0", "" | Where-Object { $_.Trim() -ne "" }
-$ubuntuInstalled = $distros | Where-Object { $_ -match "Ubuntu" }
+$alreadyImported = $distros | Where-Object { $_ -match "PlanB-SIEM" }
 
-if (-not $ubuntuInstalled) {
-    Start-WithProgress -Label "Installing Ubuntu 24.04" -EstimatedSeconds 180 -Command "wsl --install -d Ubuntu-24.04 2>&1"
-    Write-Warn "Ubuntu was just installed."
-    Write-Warn "If an Ubuntu window opened, create a user account (e.g. planbadmin), then close it."
-    Write-Host "  Press any key when Ubuntu setup is complete..." -ForegroundColor Yellow
-    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-}
+if (-not $alreadyImported) {
+    New-Item -ItemType Directory -Path $wslDir -Force | Out-Null
 
-# Find the Ubuntu distro name
-$distros = (wsl.exe --list --quiet 2>&1) -replace "`0", "" | Where-Object { $_.Trim() -ne "" }
-$DISTRO = ($distros | Where-Object { $_ -match "Ubuntu" } | Select-Object -First 1).Trim()
-if ([string]::IsNullOrWhiteSpace($DISTRO)) {
-    Write-Err "Ubuntu distro not found. Install manually: wsl --install -d Ubuntu-24.04"
-    exit 1
-}
-Write-Ok "Using distro: $DISTRO"
+    # Download minimal rootfs (~100MB — Debian slim + Docker Engine, no Ubuntu)
+    Start-WithProgress -Label "Downloading Docker environment" -EstimatedSeconds 30 -Command "powershell -NoProfile -Command `"Invoke-WebRequest -Uri '$rootfsUrl' -OutFile '$rootfsFile' -UseBasicParsing`""
 
-# ============================================================
-# 4. WSL2 Networking - ensure DNS works
-# ============================================================
-Write-Step "WSL2 Networking"
-
-# Clean up any broken .wslconfig (e.g. mirrored networking from a previous attempt)
-$wslConfig = "$env:USERPROFILE\.wslconfig"
-if (Test-Path $wslConfig) {
-    $content = Get-Content $wslConfig -Raw
-    if ($content -match "networkingMode") {
-        Write-Ok "Removing broken networkingMode from .wslconfig"
-        $content = $content -replace "networkingMode=.*", ""
-        Set-Content -Path $wslConfig -Value $content.Trim() -NoNewline
-    }
-}
-
-# Ensure WSL auto-generates resolv.conf for DNS
-wsl.exe -d $DISTRO -u root -- bash -c "
-    if grep -q 'generateResolvConf.*false' /etc/wsl.conf 2>/dev/null; then
-        sed -i 's/generateResolvConf.*=.*false/generateResolvConf = true/' /etc/wsl.conf
-    fi
-" 2>&1 | Out-Null
-
-# Test DNS - if it fails, restart WSL to regenerate resolv.conf
-$dnsTest = wsl.exe -d $DISTRO -- bash -c "ping -c1 -W3 github.com >/dev/null 2>&1 && echo OK || echo FAIL" 2>&1
-if ($dnsTest -notmatch "OK") {
-    Write-Ok "Restarting WSL for DNS fix..."
-    wsl --shutdown 2>&1 | Out-Null
-    Start-Sleep -Seconds 3
-
-    $retries = 0
-    $wslReady = ""
-    do {
-        $retries++
-        Start-Sleep -Seconds 3
-        try {
-            $wslReady = wsl.exe -d $DISTRO -- echo "ready" 2>&1
-        } catch {
-            $wslReady = ""
-        }
-    } while ($wslReady -notmatch "ready" -and $retries -lt 10)
-
-    if ($wslReady -notmatch "ready") {
-        Write-Err "WSL failed to restart. Try: wsl --shutdown, then re-run this script."
+    if (-not (Test-Path $rootfsFile)) {
+        Write-Err "Failed to download WSL image from $rootfsUrl"
         exit 1
     }
+
+    # Import into WSL2 — takes seconds, no interactive prompts
+    Write-Ok "Importing WSL image..."
+    wsl --import $DISTRO $wslDir $rootfsFile --version 2 2>&1 | Out-Null
+    Remove-Item $rootfsFile -Force -ErrorAction SilentlyContinue
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "WSL import failed. Try: wsl --unregister PlanB-SIEM, then re-run."
+        exit 1
+    }
+    Write-Ok "WSL Docker environment imported"
+} else {
+    Write-Ok "PlanB-SIEM WSL distro already exists"
 }
-Write-Ok "WSL networking is ready"
+
+# Start Docker daemon (wsl.conf [boot] command handles this on reboot,
+# but we need it running now for the first install)
+Write-Ok "Starting Docker daemon..."
+wsl.exe -d $DISTRO -u root -- bash -c "
+    if ! docker info &>/dev/null 2>&1; then
+        dockerd &>/var/log/dockerd.log &
+        sleep 5
+    fi
+    docker info &>/dev/null && echo 'Docker ready' || echo 'Docker failed to start'
+" 2>&1 | ForEach-Object { Write-Host "  $_" }
+
+# Verify DNS
+$dnsTest = wsl.exe -d $DISTRO -- bash -c "curl -sf https://ghcr.io/v2/ >/dev/null 2>&1 && echo OK || echo FAIL" 2>&1
+if ($dnsTest -notmatch "OK") {
+    Write-Warn "DNS/network issue detected, restarting WSL..."
+    wsl --shutdown 2>&1 | Out-Null
+    Start-Sleep -Seconds 3
+    wsl.exe -d $DISTRO -u root -- bash -c "dockerd &>/var/log/dockerd.log & sleep 5" 2>&1 | Out-Null
+}
+Write-Ok "Docker environment ready"
 
 # ============================================================
-# 5. Install Docker + tools inside WSL
-# ============================================================
-Write-Step "Installing Docker & Tools in WSL"
-
-$installScript = @'
-#!/bin/bash
-set -e
-export DEBIAN_FRONTEND=noninteractive
-
-echo "[1/3] Installing system tools..."
-apt-get update -qq
-apt-get install -y -qq git gettext-base openssl curl dos2unix >/dev/null 2>&1
-
-if command -v docker &>/dev/null; then
-    echo "[2/3] Docker already installed: $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo 'checking...')"
-else
-    echo "[2/3] Installing Docker..."
-    curl -fsSL https://get.docker.com | sh 2>&1 | tail -3
-fi
-
-# Ensure Docker is running
-if ! docker info &>/dev/null; then
-    echo "[2/3] Starting Docker daemon..."
-    dockerd &>/var/log/dockerd.log &
-    sleep 5
-fi
-
-# Verify
-echo "[3/3] Verifying..."
-docker version --format 'Docker {{.Server.Version}}' 2>/dev/null || echo "Docker check pending (will start on next boot)"
-docker compose version 2>/dev/null || echo "Docker Compose check pending"
-echo "DONE"
-'@
-
-# Write script to temp file and execute (piping into wsl.exe is unreliable)
-$tmpScript = "C:\PlanB-SIEM\tmp-install.sh"
-New-Item -ItemType Directory -Path "C:\PlanB-SIEM" -Force | Out-Null
-# Use .NET to write UTF-8 without BOM (PS5 Set-Content -Encoding utf8 adds BOM)
-[System.IO.File]::WriteAllText($tmpScript, $installScript, (New-Object System.Text.UTF8Encoding $false))
-Start-WithProgress -Label "Installing Docker & tools" -EstimatedSeconds 120 -Command "wsl.exe -d $DISTRO -u root -- bash -c `"sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-install.sh && bash /mnt/c/PlanB-SIEM/tmp-install.sh`""
-Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
-Write-Ok "Docker and tools installed"
-
-# ============================================================
-# 6. Clone repo and configure
+# 4. Clone repo and configure
 # ============================================================
 Write-Step "Setting Up SIEM"
 
 $setupScript = @"
 #!/bin/bash
 set -e
-
-# Ensure Docker is running
-if ! docker info &>/dev/null 2>&1; then
-    dockerd &>/var/log/dockerd.log &
-    sleep 5
-fi
 
 SIEM_DIR=/opt/plan-b-siem
 
@@ -472,7 +408,7 @@ if ($result -match "EXIT_CODE=0") {
 }
 
 # ============================================================
-# 8. Windows Firewall Rules
+# 7. Windows Firewall Rules
 # ============================================================
 Write-Step "Firewall Rules"
 
@@ -501,7 +437,7 @@ foreach ($port in $udpPorts) {
 }
 
 # ============================================================
-# 9. Port Forwarding
+# 8. Port Forwarding
 # ============================================================
 Write-Step "Port Forwarding"
 
@@ -516,7 +452,7 @@ foreach ($port in $allPorts) {
 }
 
 # ============================================================
-# 10. Register Auto-Start Scheduled Task
+# 9. Register Auto-Start Scheduled Task
 # ============================================================
 Write-Step "Auto-Start Configuration"
 
@@ -562,7 +498,7 @@ Register-ScheduledTask `
 Write-Ok "Auto-start scheduled task registered"
 
 # ============================================================
-# 11. Health Check
+# 10. Health Check
 # ============================================================
 Write-Step "Final Health Check"
 
@@ -571,7 +507,7 @@ $healthResult = wsl.exe -d $DISTRO -u root -- bash -c "/opt/plan-b-siem/resilien
 $healthResult | ForEach-Object { Write-Host "  $_" }
 
 # ============================================================
-# 12. Copy CA cert to Desktop
+# 11. Copy CA cert to Desktop
 # ============================================================
 Write-Step "Certificate"
 

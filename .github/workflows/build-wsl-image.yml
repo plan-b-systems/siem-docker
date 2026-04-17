@@ -1,0 +1,44 @@
+name: Build WSL Docker Image
+
+on:
+  push:
+    branches: [v2]
+    paths:
+      - 'wsl-image/**'
+      - '.github/workflows/build-wsl-image.yml'
+  workflow_dispatch:
+
+jobs:
+  build-wsl-rootfs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build minimal Docker image
+        run: |
+          docker build -t plan-b-wsl ./wsl-image
+
+      - name: Export rootfs as tar.gz
+        run: |
+          docker create --name tmp-wsl plan-b-wsl
+          docker export tmp-wsl | gzip -9 > plan-b-docker-wsl.tar.gz
+          docker rm tmp-wsl
+          ls -lh plan-b-docker-wsl.tar.gz
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: wsl-image-v2
+          name: WSL Docker Image (v2)
+          body: |
+            Minimal Debian + Docker Engine rootfs for WSL2 import.
+            Used by the Windows deployment script.
+
+            Import manually: `wsl --import PlanB-SIEM C:\PlanB-SIEM\wsl plan-b-docker-wsl.tar.gz --version 2`
+          files: plan-b-docker-wsl.tar.gz
+          make_latest: false
+          prerelease: false

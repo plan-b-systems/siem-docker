@@ -1,5 +1,5 @@
 # ============================================================
-# Plan-B Systems SIEM – Windows Boot Startup Script
+# Plan-B Systems SIEM v2 – Windows Boot Startup Script
 # Runs as a Scheduled Task at system startup
 # Starts WSL, waits for Docker, sets up port forwarding
 # ============================================================
@@ -7,7 +7,6 @@
 $ErrorActionPreference = "Continue"
 $LogFile = "C:\PlanB-SIEM\startup.log"
 
-# Ensure log directory exists
 New-Item -ItemType Directory -Path "C:\PlanB-SIEM" -Force | Out-Null
 
 function Write-Log {
@@ -20,22 +19,20 @@ Write-Log "========== Windows boot detected =========="
 
 # ── 1. Start WSL ──
 Write-Log "Starting WSL..."
-$distro = "Ubuntu-24.04"
+$distro = "PlanB-SIEM"
 
-# Find the correct distro name
-$distros = wsl.exe --list --quiet 2>&1
-if ($distros -match "Ubuntu") {
-    $distro = ($distros | Where-Object { $_ -match "Ubuntu" } | Select-Object -First 1).Trim()
-    # Remove null characters from WSL output
-    $distro = $distro -replace "`0", ""
+# Verify distro exists
+$distros = (wsl.exe --list --quiet 2>&1) -replace "`0", "" | Where-Object { $_.Trim() -ne "" }
+if (-not ($distros | Where-Object { $_ -match "PlanB-SIEM" })) {
+    Write-Log "ERROR: PlanB-SIEM WSL distro not found"
+    exit 1
 }
-Write-Log "Using WSL distro: $distro"
 
-# Start WSL (triggers [boot] command in wsl.conf which starts Docker + SIEM)
+# Start WSL (triggers [boot] command in wsl.conf which starts dockerd)
 wsl.exe -d $distro -- echo "WSL started" 2>&1 | Out-Null
 Write-Log "WSL distro started"
 
-# ── 2. Wait for Docker daemon inside WSL ──
+# ── 2. Wait for Docker daemon ──
 Write-Log "Waiting for Docker daemon..."
 $timeout = 120
 $elapsed = 0
@@ -50,33 +47,32 @@ do {
 } while ($elapsed -lt $timeout)
 
 if ($elapsed -ge $timeout) {
-    Write-Log "ERROR: Docker daemon failed to start within ${timeout}s"
-    exit 1
+    Write-Log "ERROR: Docker daemon failed to start within ${timeout}s, attempting manual start..."
+    wsl.exe -d $distro -u root -- bash -c "dockerd &>/var/log/dockerd.log &" 2>&1 | Out-Null
+    Start-Sleep -Seconds 10
 }
 
-# ── 3. Wait for SIEM containers (wsl-startup.sh should have started them) ──
-Write-Log "Waiting for SIEM containers..."
+# ── 3. Start SIEM containers ──
+Write-Log "Starting SIEM stack..."
+wsl.exe -d $distro -u root -- bash -c "cd /opt/plan-b-siem && docker compose -f docker-compose.windows.yml --env-file config.env up -d 2>&1" 2>&1 | Out-Null
+
+# Wait for OpenSearch healthy
 $timeout = 300
 $elapsed = 0
 do {
-    $graylogStatus = (wsl.exe -d $distro -- docker inspect --format '{{.State.Health.Status}}' plan-b-graylog 2>&1).Trim() -replace "`0", ""
-    if ($graylogStatus -eq "healthy") {
-        Write-Log "Graylog is healthy"
+    $osStatus = (wsl.exe -d $distro -- docker inspect --format '{{.State.Health.Status}}' plan-b-opensearch 2>&1).Trim() -replace "`0", ""
+    if ($osStatus -eq "healthy") {
+        Write-Log "OpenSearch is healthy"
         break
     }
     Start-Sleep -Seconds 10
     $elapsed += 10
-    Write-Log "Graylog status: $graylogStatus (${elapsed}s)"
+    Write-Log "OpenSearch status: $osStatus (${elapsed}s)"
 } while ($elapsed -lt $timeout)
 
-if ($elapsed -ge $timeout) {
-    Write-Log "WARNING: Graylog not healthy after ${timeout}s, continuing with port forwarding..."
-}
-
-# ── 4. Set up port forwarding (netsh portproxy) ──
+# ── 4. Port forwarding ──
 Write-Log "Configuring port forwarding..."
 
-# Get WSL2 IP
 $wslIP = (wsl.exe -d $distro -- hostname -I 2>&1).Trim().Split()[0] -replace "`0", ""
 Write-Log "WSL2 IP: $wslIP"
 
@@ -85,34 +81,26 @@ if ([string]::IsNullOrEmpty($wslIP)) {
     exit 1
 }
 
-# Clear existing portproxy rules
 netsh interface portproxy reset 2>&1 | Out-Null
-
-# TCP ports
-$tcpPorts = @(9000, 514, 1514, 12201, 12202)
-foreach ($port in $tcpPorts) {
+$allPorts = @(3000, 514, 1514)
+foreach ($port in $allPorts) {
     netsh interface portproxy add v4tov4 listenport=$port listenaddress=0.0.0.0 connectport=$port connectaddress=$wslIP 2>&1 | Out-Null
     Write-Log "Port forwarding: 0.0.0.0:${port} -> ${wslIP}:${port}"
 }
 
-# ── 5. Ensure firewall rules exist (idempotent) ──
+# ── 5. Firewall rules (idempotent) ──
 Write-Log "Checking firewall rules..."
 
-$fwTcpPorts = @(9000, 1514, 12202)
-$fwUdpPorts = @(514, 12201)
-
-foreach ($port in $fwTcpPorts) {
+foreach ($port in @(3000, 1514)) {
     $ruleName = "PlanB-SIEM-TCP-$port"
-    $exists = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-    if (-not $exists) {
+    if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow -Profile Any 2>&1 | Out-Null
         Write-Log "Created firewall rule: $ruleName"
     }
 }
-foreach ($port in $fwUdpPorts) {
+foreach ($port in @(514)) {
     $ruleName = "PlanB-SIEM-UDP-$port"
-    $exists = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-    if (-not $exists) {
+    if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol UDP -LocalPort $port -Action Allow -Profile Any 2>&1 | Out-Null
         Write-Log "Created firewall rule: $ruleName"
     }

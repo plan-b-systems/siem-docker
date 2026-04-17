@@ -20,21 +20,27 @@ function Write-Ok    { param($msg) Write-Host "  [OK]    $msg" -ForegroundColor 
 function Write-Warn  { param($msg) Write-Host "  [WARN]  $msg" -ForegroundColor Yellow }
 function Write-Err   { param($msg) Write-Host "  [ERROR] $msg" -ForegroundColor Red }
 
-# -- Progress bar for long-running background tasks --
+# -- Progress bar for long-running commands --
+# Runs the command as a System.Diagnostics.Process so WSL/docker calls work.
+# $Command is a string (not scriptblock) that gets passed to powershell -Command.
 function Start-WithProgress {
     param(
         [string]$Label,
-        [scriptblock]$Task,
+        [string]$Command,
         [int]$EstimatedSeconds = 120
     )
-    $job = Start-Job -ScriptBlock $Task
+    # Launch as a child powershell process — inherits environment, WSL works
+    $outFile = "$env:TEMP\plan-b-progress-$([System.IO.Path]::GetRandomFileName()).txt"
+    $proc = Start-Process -FilePath "powershell.exe" `
+        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"$Command | Out-File -FilePath '$outFile' -Encoding utf8`"" `
+        -WindowStyle Hidden -PassThru
+
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $barWidth = 30
-
     $fillChar = [string][char]0x2588
     $emptyChar = [string][char]0x2591
 
-    while ($job.State -eq 'Running') {
+    while (-not $proc.HasExited) {
         $elapsed = $sw.Elapsed.TotalSeconds
         $pct = [math]::Min(95, [math]::Floor(($elapsed / $EstimatedSeconds) * 100))
         $filled = [math]::Floor($barWidth * $pct / 100)
@@ -46,14 +52,13 @@ function Start-WithProgress {
         Write-Host "`r  $Label [$bar] ${pct}% ($timeStr)  " -NoNewline -ForegroundColor Yellow
         Start-Sleep -Milliseconds 500
     }
-
-    $result = Receive-Job -Job $job
-    Remove-Job -Job $job -Force
     $sw.Stop()
 
     $total = [math]::Floor($sw.Elapsed.TotalSeconds)
     $bar = $fillChar * $barWidth
     Write-Host "`r  $Label [$bar] 100% (${total}s)     " -ForegroundColor Green
+
+    $result = if (Test-Path $outFile) { Get-Content $outFile -Raw; Remove-Item $outFile -Force } else { "" }
     return $result
 }
 
@@ -188,9 +193,7 @@ $distros = (wsl.exe --list --quiet 2>&1) -replace "`0", "" | Where-Object { $_.T
 $ubuntuInstalled = $distros | Where-Object { $_ -match "Ubuntu" }
 
 if (-not $ubuntuInstalled) {
-    Start-WithProgress -Label "Installing Ubuntu 24.04" -EstimatedSeconds 180 -Task {
-        wsl --install -d Ubuntu-24.04 2>&1 | Out-Null
-    }
+    Start-WithProgress -Label "Installing Ubuntu 24.04" -EstimatedSeconds 180 -Command "wsl --install -d Ubuntu-24.04 2>&1"
     Write-Warn "Ubuntu was just installed."
     Write-Warn "If an Ubuntu window opened, create a user account (e.g. planbadmin), then close it."
     Write-Host "  Press any key when Ubuntu setup is complete..." -ForegroundColor Yellow
@@ -295,10 +298,7 @@ $tmpScript = "C:\PlanB-SIEM\tmp-install.sh"
 New-Item -ItemType Directory -Path "C:\PlanB-SIEM" -Force | Out-Null
 # Use .NET to write UTF-8 without BOM (PS5 Set-Content -Encoding utf8 adds BOM)
 [System.IO.File]::WriteAllText($tmpScript, $installScript, (New-Object System.Text.UTF8Encoding $false))
-$distroForJob = $DISTRO
-Start-WithProgress -Label "Installing Docker & tools" -EstimatedSeconds 120 -Task {
-    wsl.exe -d $using:distroForJob -u root -- bash -c "sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-install.sh && bash /mnt/c/PlanB-SIEM/tmp-install.sh" 2>&1
-}
+Start-WithProgress -Label "Installing Docker & tools" -EstimatedSeconds 120 -Command "wsl.exe -d $DISTRO -u root -- bash -c `"sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-install.sh && bash /mnt/c/PlanB-SIEM/tmp-install.sh`""
 Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
 Write-Ok "Docker and tools installed"
 
@@ -372,9 +372,7 @@ echo "DONE"
 # Write script to temp file and execute (piping into wsl.exe is unreliable)
 $tmpScript = "C:\PlanB-SIEM\tmp-setup.sh"
 [System.IO.File]::WriteAllText($tmpScript, $setupScript, (New-Object System.Text.UTF8Encoding $false))
-Start-WithProgress -Label "Cloning repo & configuring" -EstimatedSeconds 30 -Task {
-    wsl.exe -d $using:distroForJob -u root -- bash -c "sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-setup.sh && bash /mnt/c/PlanB-SIEM/tmp-setup.sh" 2>&1
-}
+Start-WithProgress -Label "Cloning repo & configuring" -EstimatedSeconds 30 -Command "wsl.exe -d $DISTRO -u root -- bash -c `"sed -i 's/\r$//' /mnt/c/PlanB-SIEM/tmp-setup.sh && bash /mnt/c/PlanB-SIEM/tmp-setup.sh`""
 Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
 Write-Ok "Repository cloned and configured"
 
@@ -383,9 +381,7 @@ Write-Ok "Repository cloned and configured"
 # ============================================================
 Write-Step "Running SIEM Installer (this takes 5-10 minutes)"
 
-$result = Start-WithProgress -Label "Building SIEM stack" -EstimatedSeconds 360 -Task {
-    wsl.exe -d $using:distroForJob -u root -- bash -c "cd /opt/plan-b-siem && chmod +x install.sh && ./install.sh 2>&1; echo EXIT_CODE=`$?"
-}
+$result = Start-WithProgress -Label "Building SIEM stack" -EstimatedSeconds 360 -Command "wsl.exe -d $DISTRO -u root -- bash -c 'cd /opt/plan-b-siem && chmod +x install.sh && ./install.sh 2>&1; echo EXIT_CODE=`$?'"
 
 $exitLine = ($result | Select-String "EXIT_CODE=").ToString()
 $exitCode = [int]($exitLine -replace ".*EXIT_CODE=", "")

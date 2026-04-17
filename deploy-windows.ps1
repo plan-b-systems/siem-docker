@@ -201,8 +201,10 @@ $alreadyImported = $distros | Where-Object { $_ -match "PlanB-SIEM" }
 if (-not $alreadyImported) {
     New-Item -ItemType Directory -Path $wslDir -Force | Out-Null
 
-    # Download minimal rootfs (~100MB — Debian slim + Docker Engine, no Ubuntu)
-    Start-WithProgress -Label "Downloading Docker environment" -EstimatedSeconds 30 -Command "powershell -NoProfile -Command `"Invoke-WebRequest -Uri '$rootfsUrl' -OutFile '$rootfsFile' -UseBasicParsing`""
+    # Download minimal rootfs (~156MB — Debian slim + Docker Engine, no Ubuntu)
+    # Use curl.exe (built into Windows 10+) — much faster than Invoke-WebRequest
+    Write-Ok "Downloading Docker environment (~156 MB)..."
+    curl.exe -fSL -o $rootfsFile $rootfsUrl
 
     if (-not (Test-Path $rootfsFile)) {
         Write-Err "Failed to download WSL image from $rootfsUrl"

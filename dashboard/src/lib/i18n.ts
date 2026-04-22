@@ -10,6 +10,10 @@ export const translations = {
   'nav.settings': { he: 'הגדרות', en: 'Settings' },
   'nav.logout': { he: 'התנתק', en: 'Logout' },
   'nav.collapse': { he: 'כווץ', en: 'Collapse' },
+  'nav.users': { he: 'משתמשים', en: 'Users' },
+  'nav.audit': { he: 'יומן ביקורת', en: 'Audit log' },
+  'nav.account': { he: 'חשבון', en: 'Account' },
+  'nav.changePassword': { he: 'שנה סיסמה', en: 'Change password' },
 
   // Login
   'login.title': { he: 'לוח בקרה SIEM', en: 'SIEM Dashboard' },

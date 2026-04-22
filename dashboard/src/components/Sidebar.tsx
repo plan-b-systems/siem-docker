@@ -1,9 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import {
   LayoutDashboard,
   ShieldAlert,
@@ -14,6 +14,9 @@ import {
   ChevronRight,
   LogOut,
   HeartPulse,
+  Users,
+  ScrollText,
+  KeyRound,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useLanguage } from './LanguageProvider'
@@ -27,16 +30,43 @@ const navItems: { href: string; labelKey: TranslationKey; icon: typeof LayoutDas
   { href: '/health', labelKey: 'nav.health' as TranslationKey, icon: HeartPulse },
 ]
 
+const adminItems: { href: string; labelKey: TranslationKey; icon: typeof Users }[] = [
+  { href: '/admin/users', labelKey: 'nav.users', icon: Users },
+  { href: '/admin/audit', labelKey: 'nav.audit', icon: ScrollText },
+]
+
+type MeResponse = {
+  user: {
+    id: string
+    username: string
+    role: 'admin' | 'user'
+  }
+}
+
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
+  const [me, setMe] = useState<MeResponse['user'] | null>(null)
   const pathname = usePathname()
+  const router = useRouter()
   const { t, dir } = useLanguage()
   const isRtl = dir === 'rtl'
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/auth/me')
+        if (res.ok) setMe((await res.json() as MeResponse).user)
+      } catch {}
+    })()
+  }, [])
+
   async function handleLogout() {
-    await fetch('/api/auth/login', { method: 'DELETE' })
-    window.location.href = '/login'
+    await fetch('/api/auth/logout', { method: 'POST' })
+    router.push('/login')
+    router.refresh()
   }
+
+  const isAdmin = me?.role === 'admin'
 
   return (
     <aside
@@ -56,7 +86,7 @@ export default function Sidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 py-4 space-y-1 px-2">
+      <nav className="flex-1 py-4 space-y-1 px-2 overflow-y-auto">
         {navItems.map(({ href, labelKey, icon: Icon }) => {
           const active = pathname === href || pathname.startsWith(href + '/')
           const label = t(labelKey)
@@ -66,9 +96,7 @@ export default function Sidebar() {
               href={href}
               className={cn(
                 'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                active
-                  ? 'bg-blue-600/15 text-blue-400'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50',
+                active ? 'bg-blue-600/15 text-blue-400' : 'text-slate-400 hover:text-white hover:bg-slate-800/50',
                 collapsed && 'justify-center px-0'
               )}
               title={collapsed ? label : undefined}
@@ -78,17 +106,60 @@ export default function Sidebar() {
             </Link>
           )
         })}
+
+        {isAdmin && (
+          <div className="pt-4">
+            {!collapsed && <div className="px-3 pb-1 text-[10px] uppercase tracking-wide text-slate-600">Admin</div>}
+            {adminItems.map(({ href, labelKey, icon: Icon }) => {
+              const active = pathname === href || pathname.startsWith(href + '/')
+              const label = t(labelKey)
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  className={cn(
+                    'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                    active ? 'bg-purple-600/15 text-purple-300' : 'text-slate-400 hover:text-white hover:bg-slate-800/50',
+                    collapsed && 'justify-center px-0'
+                  )}
+                  title={collapsed ? label : undefined}
+                >
+                  <Icon size={20} className="shrink-0" />
+                  {!collapsed && <span>{label}</span>}
+                </Link>
+              )
+            })}
+          </div>
+        )}
       </nav>
 
       {/* Bottom */}
       <div className="border-t border-slate-800 py-3 px-2 space-y-1">
+        {me && !collapsed && (
+          <div className="px-3 py-1.5 text-xs text-slate-500 truncate">
+            <span className="text-slate-400">{me.username}</span>
+            <span className="ml-1">({me.role})</span>
+          </div>
+        )}
+
+        <Link
+          href="/change-password"
+          className={cn(
+            'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+            pathname === '/change-password' ? 'bg-blue-600/15 text-blue-400' : 'text-slate-400 hover:text-white hover:bg-slate-800/50',
+            collapsed && 'justify-center px-0'
+          )}
+          title={collapsed ? t('nav.changePassword') : undefined}
+        >
+          <KeyRound size={20} className="shrink-0" />
+          {!collapsed && <span>{t('nav.changePassword')}</span>}
+        </Link>
+
         <Link
           href="/settings"
           className={cn(
             'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-            pathname === '/settings'
-              ? 'bg-blue-600/15 text-blue-400'
-              : 'text-slate-400 hover:text-white hover:bg-slate-800/50',
+            pathname === '/settings' ? 'bg-blue-600/15 text-blue-400' : 'text-slate-400 hover:text-white hover:bg-slate-800/50',
             collapsed && 'justify-center px-0'
           )}
           title={collapsed ? 'Settings' : undefined}
@@ -109,7 +180,6 @@ export default function Sidebar() {
           {!collapsed && <span>{t('nav.logout')}</span>}
         </button>
 
-        {/* Collapse toggle */}
         <button
           onClick={() => setCollapsed(!collapsed)}
           className={cn(

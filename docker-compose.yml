@@ -21,6 +21,7 @@ networks:
 volumes:
   opensearch-data:
   license-data:
+  dashboard-data:
 
 services:
 
@@ -131,11 +132,21 @@ services:
       RETENTION_DAYS: "${RETENTION_DAYS:-730}"
       LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.systems/api/license/check}"
       AI_KEY_FILE: "/data/ai_key.json"
+      AUTH_DB_PATH: "/auth-data/users.db"
       HOSTNAME: "0.0.0.0"
       NODE_ENV: "production"
       TZ: "${TIMEZONE:-Asia/Jerusalem}"
+      # SMTP for self-service password reset (optional — if unset, reset tokens print to container log for SSH-assisted retrieval)
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASS: "${SMTP_PASS:-}"
+      SMTP_FROM: "${SMTP_FROM:-no-reply@plan-b.systems}"
+      # Public URL used in password-reset email links. Defaults to http://<host>:3000 if unset.
+      PUBLIC_URL: "${PUBLIC_URL:-}"
     volumes:
       - license-data:/data:ro
+      - dashboard-data:/auth-data
     ports:
       - "${BIND_ADDRESS:-0.0.0.0}:${DASHBOARD_PORT:-3000}:3000"
     healthcheck:

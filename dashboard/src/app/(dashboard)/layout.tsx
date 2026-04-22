@@ -1,8 +1,20 @@
+import { redirect } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import { LanguageProvider } from '@/components/LanguageProvider'
 import AiChat from '@/components/AiChat'
+import { requireUser } from '@/lib/auth-require'
+import { ensureBootstrapped } from '@/lib/auth-bootstrap'
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+export const dynamic = 'force-dynamic'
+
+export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
+  await ensureBootstrapped()
+  const auth = await requireUser()
+  if ('errorResponse' in auth) redirect('/login')
+
+  if (auth.user.must_change_password) redirect('/change-password')
+  if (!auth.user.mfa_enrolled) redirect('/enroll-mfa')
+
   return (
     <LanguageProvider>
       <div className="min-h-screen">

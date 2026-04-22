@@ -305,6 +305,7 @@ On-Prem                                    Cloud (siemsys)
 | 12 | One-liner deployment | 2026-04-07 | Approved |
 | 13 | Encrypted on-prem↔cloud API | 2026-04-07 | Approved |
 | 14 | API key rotation process | 2026-04-07 | Approved |
+| 15 | Multi-user auth, tier 2 (SQLite + TOTP MFA + lockout + audit + self-service reset) | 2026-04-22 | Approved |
 
 ---
 
@@ -337,3 +338,60 @@ On-Prem                                    Cloud (siemsys)
 - Key creation (manual on console.anthropic.com)
 - Per-key spend limits (workspace-level only)
 - Per-key usage tracking (all keys share one dashboard)
+
+---
+
+## 15. Multi-user auth (tier 2)
+
+**Decision (2026-04-22):** Replace the single shared `DASHBOARD_PASSWORD` with a named-user system (SQLite + bcrypt), TOTP MFA mandatory for every user, 5-fail 15-min account lockout, password history + policy, JWT sessions with DB-backed revocation + 60-min idle / 24-h absolute timeout, audit log, and self-service password reset via email.
+
+**Why:**
+- Enterprise customers won't accept "one shared admin password per site" — it's a failed finding in every security questionnaire.
+- A tier-2 design (named accounts + MFA + lockout + audit) meets OWASP ASVS L2 without the complexity of SSO/SCIM.
+
+**Storage:** `dashboard-data` docker volume mounted at `/auth-data`, SQLite `users.db` opened by the dashboard container in WAL mode. Separate from `license-data` (which stays read-only for the dashboard and read-write for license-checker). No cloud dependency — the on-prem install remains self-sufficient.
+
+**Bootstrap:** On first start the dashboard seeds a single `admin` user whose password is the bcrypt hash of the installer-time `DASHBOARD_PASSWORD`. `must_change_password = 1` + `mfa_enrolled = 0` are set so the admin is funnelled through `/change-password` → `/enroll-mfa` before reaching any dashboard page. No behaviour change for sites that haven't migrated — the installer already writes `DASHBOARD_PASSWORD_HASH` and the seed reuses it verbatim.
+
+**Emergency access:** `docker exec plan-b-dashboard node scripts/reset-admin.js <new-pw>` resets the admin, clears MFA, and requires a change-on-next-login. A shell wrapper `scripts/reset-admin.sh` lives in the repo root for convenience.
+
+**Password policy (enforced in `src/lib/auth-password.ts`):**
+- ≥12 characters, with upper + lower + digit
+- Cannot contain the username
+- Cannot match any of the last 5 hashes
+- bcrypt cost factor 12
+
+**Lockout:** 5 consecutive failed password or MFA attempts → 15-minute lockout. Admin can unlock from `/admin/users`.
+
+**MFA:** RFC 6238 TOTP (30 s step, ±1 step drift tolerance) via `otplib`. Secret generated server-side, shown to the user once as a QR + manually-copyable string, confirmed with a 6-digit code before `mfa_enrolled` flips to 1. Re-enrolment post-activation requires an admin "Clear MFA" — a hijacked session cannot rebind MFA to the attacker's device.
+
+**Sessions:** JWT (jose HS256) carrying `{sub, jti}`. `jti` maps to a `sessions` row with `issued_at / expires_at / idle_expires_at`. Every API request refreshes `idle_expires_at`; 60 min idle or 24 h absolute wins first. Admin action "Revoke sessions" sets `revoked_at` — the next request from that cookie is denied. Password change and reset revoke all sessions.
+
+**Audit log:** Every authentication event, every admin mutation (user create / update / password reset / clear MFA / unlock / revoke / delete) writes a row to `audit_log` with actor, IP, user-agent, success flag, and free-form message. Viewable by admins at `/admin/audit`.
+
+**Self-service reset:** `/forgot-password` accepts username or email, always 200s (no enumeration), writes a hashed token with 30-min TTL. If SMTP is configured AND the user has an email on file, the reset link is emailed. Otherwise the link is logged to the dashboard container's stdout so an admin can retrieve it via `docker logs`.
+
+**Middleware:** Edge-runtime middleware only verifies the JWT signature + expiry (no DB access — better-sqlite3 isn't Edge-compatible). Deeper checks (session revocation, idle timeout, user state, role) happen in the dashboard layout's server component and in every `requireUser()` / `requireAdmin()` call from API routes.
+
+**Forced-flow enforcement:** The `(dashboard)/` layout server component calls `requireUser()` → redirects to `/change-password` if `must_change_password`, else to `/enroll-mfa` if `!mfa_enrolled`. Admin-only pages live under `(dashboard)/admin/` with an additional `requireAdmin()` in the nested layout.
+
+**Cookie hardening:** `httpOnly`, `sameSite=lax`. `secure=true` only when `COOKIE_SECURE=1` — on-prem installs typically start over plain HTTP and add TLS later via reverse proxy.
+
+**Files added:**
+- `dashboard/src/lib/auth-db.ts` (schema + migrations)
+- `dashboard/src/lib/auth-password.ts` (policy, hash, history)
+- `dashboard/src/lib/auth-totp.ts` (TOTP + QR)
+- `dashboard/src/lib/auth-session.ts` (JWT + DB session model)
+- `dashboard/src/lib/auth-audit.ts`
+- `dashboard/src/lib/auth-email.ts` (nodemailer, optional)
+- `dashboard/src/lib/auth-users.ts` (CRUD + lockout + auth)
+- `dashboard/src/lib/auth-bootstrap.ts` (seed admin from legacy hash)
+- `dashboard/src/lib/auth-require.ts` (route guards)
+- `dashboard/src/app/api/auth/{login,verify-mfa,logout,me,change-password,enroll-mfa,confirm-mfa,forgot-password,reset-password}/route.ts`
+- `dashboard/src/app/api/admin/users/...` (list, create, get, patch, delete, reset-password, clear-mfa, unlock, revoke-sessions)
+- `dashboard/src/app/api/admin/audit/route.ts`
+- `dashboard/src/app/{login,change-password,enroll-mfa,forgot-password,reset-password}/page.tsx`
+- `dashboard/src/app/(dashboard)/admin/{users,audit}/page.tsx` + `admin/layout.tsx`
+- `dashboard/scripts/reset-admin.js` + `scripts/reset-admin.sh` (emergency CLI)
+
+**Supersedes decision 6** ("Password + JWT auth") — JWT is retained but is no longer the whole story; the DB is now the source of truth for session liveness.

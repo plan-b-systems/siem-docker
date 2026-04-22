@@ -4,8 +4,20 @@ const nextConfig = {
   reactStrictMode: true,
   experimental: {
     outputFileTracingIncludes: {
-      '/api/**': ['./node_modules/bcryptjs/**', './node_modules/@anthropic-ai/**'],
+      '/api/**': [
+        './node_modules/bcryptjs/**',
+        './node_modules/@anthropic-ai/**',
+        './node_modules/better-sqlite3/**',
+        './node_modules/bindings/**',
+        './node_modules/file-uri-to-path/**',
+        './node_modules/otplib/**',
+        './node_modules/@otplib/**',
+        './node_modules/thirty-two/**',
+        './node_modules/qrcode/**',
+        './node_modules/nodemailer/**',
+      ],
     },
+    serverComponentsExternalPackages: ['better-sqlite3'],
   },
   async headers() {
     return [

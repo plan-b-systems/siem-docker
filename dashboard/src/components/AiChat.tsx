@@ -160,8 +160,10 @@ export default function AiChat() {
                 </div>
               )}
               {/* break-words handles normal text; [overflow-wrap:anywhere] breaks long tokens
-                  (paths, IPs, hashes) mid-string so they can't blow out the 85% bubble width */}
-              <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
+                  (paths, IPs, hashes) mid-string so they can't blow out the 85% bubble width.
+                  dir="auto" makes the browser detect direction per message — so Hebrew
+                  replies render RTL while LTR paths + IPs stay LTR within the same paragraph. */}
+              <div dir="auto" className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
               {msg.suggestions && msg.suggestions.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-slate-700">
                   {msg.suggestions.map((s, j) => (

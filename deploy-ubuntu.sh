@@ -5,7 +5,7 @@
 # Supports Ubuntu 22.04/24.04, Debian 12, RHEL/Rocky 8+
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/v2/deploy-linux.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/deploy-linux.sh | sudo bash
 #   OR
 #   sudo ./deploy-ubuntu.sh
 # ============================================================

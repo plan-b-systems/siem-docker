@@ -5,7 +5,7 @@
 Open **PowerShell as Administrator** and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/v2/install.ps1 | iex
+irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install.ps1 | iex
 ```
 
 The script will:
@@ -99,7 +99,7 @@ docker version
 ### Step 4 — Deploy the SIEM
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/v2/install-linux.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install-linux.sh | sudo bash
 ```
 
 Follow the prompts for client details.

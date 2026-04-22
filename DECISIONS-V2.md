@@ -55,7 +55,7 @@
 - Existing v1 clients (like PlaySmart) must not be affected
 - Both versions must be deployable at any time via one-liner:
   - v1: `irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install.ps1 | iex`
-  - v2: `irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/v2/install.ps1 | iex`
+  - v2: `irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install.ps1 | iex`
 - When v2 is stable and tested, it merges to `main` and v1 gets tagged as `v1`
 
 **Rule:** No changes to `main` branch until Mike specifically approves. v2 development happens exclusively on the `v2` branch.

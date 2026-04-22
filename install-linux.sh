@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Plan-B Systems SIEM v2 - Linux Bootstrap Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/v2/install-linux.sh | sudo bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install-linux.sh | sudo bash
 
 set -euo pipefail
 

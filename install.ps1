@@ -1,6 +1,6 @@
 # Plan-B Systems SIEM v2 - Bootstrap Installer
 # Usage: Open PowerShell as Administrator, paste this one-liner:
-#   irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/v2/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install.ps1 | iex
 
 $ProgressPreference = "SilentlyContinue"
 

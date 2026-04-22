@@ -5,7 +5,7 @@
 SSH into the Ubuntu machine as root and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/v2/install-linux.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install-linux.sh | sudo bash
 ```
 
 The script will:

@@ -143,9 +143,10 @@ export default function AiChat() {
         )}
 
         {messages.map((msg, i) => (
-          <div key={i} className={cn('flex', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
+          <div key={i} className={cn('flex min-w-0', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
             <div className={cn(
-              'max-w-[85%] rounded-xl px-3.5 py-2.5 text-sm',
+              'max-w-[85%] min-w-0 rounded-xl px-3.5 py-2.5 text-sm',
+              'overflow-hidden',
               msg.role === 'user'
                 ? 'bg-blue-600 text-white'
                 : 'bg-slate-800 text-slate-200'
@@ -158,7 +159,9 @@ export default function AiChat() {
                   )}
                 </div>
               )}
-              <div className="whitespace-pre-wrap">{msg.content}</div>
+              {/* break-words handles normal text; [overflow-wrap:anywhere] breaks long tokens
+                  (paths, IPs, hashes) mid-string so they can't blow out the 85% bubble width */}
+              <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
               {msg.suggestions && msg.suggestions.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-slate-700">
                   {msg.suggestions.map((s, j) => (

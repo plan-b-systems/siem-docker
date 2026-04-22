@@ -241,7 +241,18 @@
 
 ---
 
-## 13. Encrypted On-Prem ↔ Cloud Communication
+## 13. Encrypted On-Prem ↔ Cloud Communication — ed25519/X25519 keypair model
+
+**Status as of 2026-04-23**: **shipped**. Replaced the shared-secret sketch originally drafted in this section (which was only half-implemented) with an asymmetric keypair model that provides zero-plaintext-transit. See `pbsiem/docs/on-prem-secret-lifecycle.md` for the authoritative spec.
+
+**Short version of the shipped design:**
+- On first boot the `plan-b-license-checker` container generates an ed25519 keypair (signing) + X25519 keypair (encryption) under `/data/plan-b-*-private.pem`. Private keys never leave.
+- Bootstrap call to `/api/license/check` carries the two public keys + an ed25519 signature over `"bootstrap:<client_id>:<ts>:<nonce>"`. Portal verifies, stores public keys on the `OnPremInstallation` row, records source IP, responds with sealed-box-encrypted ANTHROPIC_API_KEY.
+- Daily calls carry only a signature (no payload), portal verifies against stored public key, responds with AI key encrypted to X25519 public.
+- Admin can trigger rotation — on-prem generates new pair on next call and sends proof of possession of BOTH old and new. No secret transits plaintext at any time.
+- IP mismatch → 7-day grace (reuses the existing GRACE_PERIOD state machine) then EXPIRED.
+
+**Original section text (for historical reference only — describes pre-implementation intent, superseded above):**
 
 **Decision:** All on-prem to cloud API communication must be authenticated and encrypted beyond basic HTTPS.
 

@@ -1,4 +1,4 @@
-# Plan-B Systems SIEM v2 — Ubuntu/Linux Deployment Guide
+# Plan-B Systems SIEM v2.1 — Ubuntu/Linux Deployment Guide
 
 ## Quick Install (One-Liner)
 
@@ -10,7 +10,7 @@ curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/ins
 
 The script will:
 1. Install git and Docker (if not present)
-2. Clone the siem-docker repo (v2 branch) to `/opt/plan-b-siem`
+2. Clone the siem-docker repo from `main` to `/opt/plan-b-siem`
 3. Prompt for client details (name, ID, LAN IP, password, timezone, retention)
 4. Auto-detect RAM and set OpenSearch heap size
 5. Deploy 4 containers: OpenSearch, Syslog Receiver, Dashboard, License Checker
@@ -34,7 +34,7 @@ After install, access the dashboard at `http://<LAN_IP>:3000`.
 
 ## What Gets Deployed
 
-SIEM v2 is a 4-container Docker stack:
+SIEM v2.1 is a 4-container Docker stack:
 
 | Container | Purpose | Ports |
 |-----------|---------|-------|
@@ -57,7 +57,7 @@ sudo systemctl enable docker && sudo systemctl start docker
 ### Step 2 — Clone the Repository
 
 ```bash
-sudo git clone -b v2 https://github.com/plan-b-systems/siem-docker.git /opt/plan-b-siem
+sudo git clone -b main https://github.com/plan-b-systems/siem-docker.git /opt/plan-b-siem
 cd /opt/plan-b-siem
 ```
 

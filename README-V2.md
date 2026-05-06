@@ -1,6 +1,8 @@
-# Plan-B Systems SIEM v2
+# Plan-B Systems SIEM v2.1
 
 On-premises SIEM with branded dashboard, AI-powered log analysis, and automated license management. No Graylog — fully custom stack.
+
+v1/Graylog is retired. The supported deployment path is v2.1 from the `main` branch.
 
 ---
 
@@ -42,7 +44,7 @@ On-premises SIEM with branded dashboard, AI-powered log analysis, and automated 
 | OS | Ubuntu 22.04 / Windows 10+ | Ubuntu 24.04 |
 | Docker | 24.0+ | latest |
 
-> v2 uses ~2-4 GB less RAM than v1 (no Graylog JVM, no MongoDB).
+> v2.1 uses a custom dashboard and syslog receiver, with no Graylog JVM and no MongoDB.
 
 ---
 
@@ -76,7 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/ins
 ### What the installer does:
 
 1. Installs Docker (if missing)
-2. Clones the v2 repository
+2. Clones the current repository from `main`
 3. Generates JWT secret + bcrypt password hash
 4. Tunes OS (vm.max_map_count, ulimits)
 5. Builds 3 container images (syslog, dashboard, license-checker)
@@ -254,20 +256,11 @@ docker compose --env-file config.env up -d
 
 ---
 
-## v1 vs v2
+## Version Status
 
-| Feature | v1 (main branch) | v2 (v2 branch) |
-|---------|-------------------|----------------|
-| Stack | Graylog + MongoDB + OpenSearch | Dashboard + Syslog + OpenSearch |
-| Containers | 4 (+ MongoDB) | 4 (no MongoDB) |
-| RAM | 8 GB minimum | 4 GB minimum |
-| UI | Graylog web interface | Custom branded dashboard |
-| AI | Via cloud only | On-prem AI Chat |
-| Language | Graylog default (EN) | HE/EN bilingual |
-| Theme | Light | Dark |
-| Deploy | `irm .../main/install.ps1 \| iex` | `irm .../v2/install.ps1 \| iex` |
+v2.1 is the supported on-prem SIEM stack and is deployed from `main`.
 
-Both versions use the same cloud license API. v1 clients are unaffected by v2.
+The retired v1 Graylog/MongoDB stack is no longer documented as an installation target.
 
 ---
 

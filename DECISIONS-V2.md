@@ -47,9 +47,11 @@
 
 ---
 
-## 3. Branch Strategy — v1/v2 Coexistence
+## 3. Branch Strategy — v2.1 on Main
 
-**Decision:** `v2` branch in siem-docker repo. `main` stays as v1.
+**Current status as of 2026-05-06:** v1 is retired. v2.1 is the supported on-prem stack and is deployed from the `main` branch.
+
+**Original decision, superseded:** `v2` branch in siem-docker repo. `main` stays as v1.
 
 **Why:**
 - Existing v1 clients (like PlaySmart) must not be affected
@@ -58,7 +60,9 @@
   - v2: `irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install.ps1 | iex`
 - When v2 is stable and tested, it merges to `main` and v1 gets tagged as `v1`
 
-**Rule:** No changes to `main` branch until Mike specifically approves. v2 development happens exclusively on the `v2` branch.
+**Current rule:** public one-line installers use `main`. Deployment scripts must not fetch, checkout, pull, or clone the retired `v2` branch.
+
+**Original rule, superseded:** No changes to `main` branch until Mike specifically approves. v2 development happens exclusively on the `v2` branch.
 
 ---
 
@@ -293,7 +297,7 @@ On-Prem                                    Cloud (siemsys)
 |---|----------|------|--------|
 | 1 | Drop Graylog + MongoDB | 2026-04-07 | Approved |
 | 2 | 4-container v2 stack | 2026-04-07 | Approved |
-| 3 | v2 branch, v1 on main | 2026-04-07 | Approved |
+| 3 | v2.1 deployed from main; retired v2 branch references removed | 2026-05-06 | Supersedes original v1/main + v2 branch decision |
 | 4 | Adapt cloud syslog receiver | 2026-04-07 | Approved |
 | 5 | Settings in OpenSearch | 2026-04-07 | Approved |
 | 6 | Password + JWT auth | 2026-04-07 | Approved |

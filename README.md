@@ -1,219 +1,165 @@
-# Plan-B Systems SIEM Stack
+# Plan-B Systems SIEM v2.1
 
-Production-ready, on-premises SIEM appliance based on **Graylog 7.2**, **OpenSearch 2.x**, and **MongoDB 7.0**, fully containerised with Docker Compose.
+On-premises SIEM appliance with a branded dashboard, syslog ingestion, OpenSearch storage, automated license management, and optional AI-powered log analysis.
 
----
+v1/Graylog is retired. The supported deployment path is the v2.1 stack from the `main` branch.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  Docker Host (Ubuntu 22/24 LTS)       │
-│                                                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────┐ │
-│  │   Graylog    │  │ OpenSearch   │  │  MongoDB   │ │
-│  │   7.2 (TLS)  │◄─│   2.18       │  │   7.0      │ │
-│  │  :9000       │  │  :9200       │  │  :27017    │ │
-│  └──────┬───────┘  └──────────────┘  └────────────┘ │
-│         │                                             │
-│  ┌──────┴───────────────────────────────────────┐   │
-│  │          License Checker (Python)             │   │
-│  │  Daily 12:00 → plan-b.systems API            │   │
-│  │  Controls Graylog + OpenSearch via Docker SDK │   │
-│  └──────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────┘
-         ▲           ▲
-  Syslog UDP/TCP   GELF UDP/TCP
-  (firewalled)     (firewalled)
+Network devices
+  | syslog UDP:514 / TCP:1514
+  v
+plan-b-syslog (Node.js)
+  | parsed RFC 3164/5424/FortiGate logs
+  v
+plan-b-opensearch (OpenSearch 2.x)
+  | logs, settings, retention policies
+  v
+plan-b-dashboard (Next.js)
+
+plan-b-license-checker (Python)
+  | daily license check + encrypted AI key delivery
+  v
+Plan-B cloud license API
 ```
 
----
+## Containers
+
+| Container | Purpose | Exposure |
+|-----------|---------|----------|
+| `plan-b-opensearch` | Log storage, search, retention | Internal Docker network |
+| `plan-b-syslog` | Syslog receiver and parser | UDP `514`, TCP `1514` |
+| `plan-b-dashboard` | Web UI, health, forensics, AI chat | HTTP `3000` |
+| `plan-b-license-checker` | License validation and AI key delivery | Internal Docker network |
 
 ## Requirements
 
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
-| CPU | 4 cores | 8 cores |
-| RAM | 8 GB | 16 GB |
-| Disk | 200 GB | 1–4 TB (external USB/NVMe) |
-| OS | Ubuntu 22.04 LTS | Ubuntu 24.04 LTS |
-| Docker | 24.0+ | latest |
-| Docker Compose | v2.20+ | latest |
+| CPU | 2 cores | 4 cores |
+| RAM | 4 GB | 8 GB+ |
+| Disk | 40 GB | 200 GB+ |
+| OS | Ubuntu 22.04/24.04 or Windows 10/11 with WSL2 | Ubuntu 24.04 |
+| Docker | 24.0+ | Latest |
 
-> **Disk sizing for 730-day retention:** A small office (~10 devices) needs ~200 GB, a medium site (~50 devices) needs ~500 GB–1 TB, and large deployments (200+ devices) may need 2–4 TB. An external USB 3.0 HDD is the cheapest solution — see [External Storage](#external-storage-data_path) below.
+## One-Line Install
 
----
+Linux:
 
-## Deployment Guides
+```bash
+curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install-linux.sh | sudo bash
+```
+
+Windows, from PowerShell as Administrator:
+
+```powershell
+irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install.ps1 | iex
+```
+
+Detailed guides:
 
 | Platform | Guide |
 |----------|-------|
-| **Ubuntu Linux** (recommended) | [UBUNTU-DEPLOY.md](UBUNTU-DEPLOY.md) |
-| **Windows 10/11** (via WSL2 + Docker Desktop) | [WINDOWS-DEPLOY.md](WINDOWS-DEPLOY.md) |
+| Ubuntu/Linux | [UBUNTU-DEPLOY.md](UBUNTU-DEPLOY.md) |
+| Windows | [WINDOWS-DEPLOY.md](WINDOWS-DEPLOY.md) |
 
----
+## Installer Prompts
 
-## Quick Start
+| Prompt | Description | Example |
+|--------|-------------|---------|
+| Client name | Short site identifier, no spaces | `acme-tlv` |
+| Client ID | License ID from Plan-B portal | `BYI-tWuwmUCprt0XdX1w` |
+| LAN IP | Appliance network IP | `192.168.1.100` |
+| Dashboard password | Initial admin password | `MySecurePass1` |
+| Timezone | TZ database name | `Asia/Jerusalem` |
+| Retention | Days to keep logs | `730` |
+| Data path | Optional external storage path | `/mnt/siem-data` |
 
-### 1. Install Docker and Compose plugin
+## Dashboard
 
-```bash
-curl -fsSL https://get.docker.com | sh
-apt-get install -y docker-compose-plugin gettext-base openssl git
+URL:
+
+```text
+http://<LAN_IP>:3000
 ```
 
-### 2. Clone the stack to the target machine
+Primary pages:
 
-```bash
-git clone https://github.com/plan-b-systems/siem-docker.git /opt/plan-b-siem
-cd /opt/plan-b-siem
-```
-
-### 3. Configure for this client
-
-```bash
-cp config.env.template config.env
-nano config.env          # fill in all values
-```
-
-Key variables to set:
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `CLIENT_NAME` | Short site identifier | `acme-tlv` |
-| `CLIENT_ID` | License ID from Plan-B portal | `SITE-0042` |
-| `GRAYLOG_HOSTNAME` | FQDN or IP of this appliance | `siem.acme.local` |
-| `GRAYLOG_ADMIN_PASSWORD` | Admin UI password | *(strong password)* |
-| `TIMEZONE` | Local timezone | `Asia/Jerusalem` |
-| `RETENTION_DAYS` | Days of logs to keep | `730` |
-| `DATA_PATH` | External disk mount (optional) | `/mnt/siem-data` |
-| `OPENSEARCH_HEAP_SIZE` | Half of host RAM | `4g` |
-
-### 4. Install
-
-```bash
-sudo ./install.sh
-```
-
-The installer will:
-- Validate prerequisites and config
-- Auto-generate all secrets (appended to `config.env`)
-- Generate a self-signed TLS certificate with a local CA
-- Set up external storage directories if `DATA_PATH` is configured
-- Tune the OS (`vm.max_map_count`, ulimits)
-- Pull and start all containers
-- Configure Graylog inputs via REST API
-- Register a systemd service for auto-start on boot
-
-### 5. Access the UI
-
-```
-https://<GRAYLOG_HOSTNAME>:9000
-Username: admin
-Password: <value of GRAYLOG_ADMIN_PASSWORD in config.env>
-```
-
-Import `certs/ca.crt` into your browser / OS certificate store to trust the TLS certificate.
-
----
-
-## External Storage (DATA_PATH)
-
-For 730-day log retention, you'll likely need more disk than the OS drive provides. The cheapest solution is an external USB 3.0 HDD.
-
-### Setting up an external drive
-
-```bash
-# 1. Identify the drive
-lsblk
-
-# 2. Format (one-time — THIS ERASES THE DRIVE)
-sudo mkfs.ext4 /dev/sdb1
-
-# 3. Create mount point and mount
-sudo mkdir -p /mnt/siem-data
-sudo mount /dev/sdb1 /mnt/siem-data
-
-# 4. Make permanent (survives reboot)
-echo '/dev/sdb1 /mnt/siem-data ext4 defaults,nofail 0 2' | sudo tee -a /etc/fstab
-```
-
-Then set in `config.env`:
-```
-DATA_PATH=/mnt/siem-data
-```
-
-The installer will automatically:
-- Create subdirectories (`opensearch/`, `mongodb/`, `graylog/`, `graylog-journal/`)
-- Set correct file ownership for each service
-- Generate a `docker-compose.override.yml` with bind mounts
-
-If `DATA_PATH` is left empty, Docker named volumes on the internal disk are used.
-
----
-
-## Reconfiguration
-
-After editing `config.env`:
-
-```bash
-sudo ./reconfigure.sh
-```
-
-This gracefully restarts only the affected services. No data is lost.
-
----
+| Page | Purpose |
+|------|---------|
+| Overview | Log volume, severity distribution, top sources, timeline |
+| Threats | High-severity filters, attack timeline, source correlation |
+| Forensics | Searchable log viewer, filters, pagination, CSV export |
+| Sources | Device inventory, last seen, health, severity summary |
+| Health | Disk, memory, EPS, OpenSearch, license status |
+| Settings | Language, timezone, retention, client info, OpenSearch status |
+| AI Chat | Claude-powered log investigation when licensed |
 
 ## Log Sources
 
-Send logs to the appliance on these ports (configure in `config.env`):
+| Protocol | Port | Use case |
+|----------|------|----------|
+| Syslog UDP | `514` | Firewalls, switches, routers |
+| Syslog TCP | `1514` | Servers and reliable delivery |
 
-| Protocol | Default Port | Use Case |
-|----------|-------------|----------|
-| Syslog UDP | 514 | Switches, routers, firewalls |
-| Syslog TCP | 1514 | Servers, reliable delivery |
-| GELF UDP | 12201 | Application logs |
-| GELF TCP | 12202 | Application logs (reliable) |
+Supported parsing includes RFC 5424, RFC 3164, and FortiGate key=value logs.
 
-Example syslog forwarding (rsyslog):
+Example rsyslog forwarding:
+
+```text
+*.* @@<SIEM_IP>:1514
 ```
-*.* @<SIEM_IP>:514
-```
 
----
+Example FortiGate:
+
+```text
+config log syslogd setting
+    set status enable
+    set server "<SIEM_IP>"
+    set port 514
+    set facility local0
+end
+```
 
 ## License Checker
 
-The `license-checker` container validates the Plan-B subscription daily at **12:00 local time**.
-
-### State machine
-
-```
-NORMAL ──────────────── API active=true ──────────► NORMAL
-  │                                                    ▲
-  │ API unreachable                                    │ active=true
-  ▼                                                    │
-GRACE_PERIOD                                       EXPIRED
-  │                                                    │
-  │ grace elapsed / active=false                       │
-  └────────────────────────────────────────────────►  │
-                                                       │ check every 10 min
-                                                       └──────────────────►
-```
+The license checker validates the Plan-B subscription daily at 12:00 local time.
 
 | State | Services | Check interval |
 |-------|----------|----------------|
 | `NORMAL` | All running | Daily at 12:00 |
-| `GRACE_PERIOD` | All running | Daily at 12:00 |
-| `EXPIRED` | Graylog + OpenSearch stopped | Every 10 minutes |
+| `GRACE_PERIOD` | All running during grace | Daily at 12:00 |
+| `EXPIRED` | Syslog and dashboard stopped | Every 10 minutes |
 
-> MongoDB is **never** stopped so that existing log data is preserved.
+Useful commands:
 
-License check logs: `docker exec plan-b-license-checker cat /data/license_checker.log`
+```bash
+docker exec plan-b-license-checker cat /data/license_state.json
+docker restart plan-b-license-checker
+```
 
-State file: `docker exec plan-b-license-checker cat /data/license_state.json`
+## Configuration
 
----
+The installer writes `/opt/plan-b-siem/config.env`.
+
+Important variables:
+
+| Variable | Description |
+|----------|-------------|
+| `CLIENT_NAME` | Site identifier |
+| `CLIENT_ID` | License ID from Plan-B portal |
+| `HOST_IP` | Appliance LAN IP |
+| `DASHBOARD_PASSWORD` | Initial dashboard password |
+| `TIMEZONE` | Local timezone |
+| `RETENTION_DAYS` | Log retention period |
+| `OPENSEARCH_HEAP_SIZE` | OpenSearch JVM heap |
+| `SYSLOG_UDP_PORT` | Syslog UDP port |
+| `SYSLOG_TCP_PORT` | Syslog TCP port |
+| `DASHBOARD_PORT` | Dashboard web port |
+| `LICENSE_API_URL` | Plan-B cloud license endpoint |
+| `CLIENT_SECRET` | Optional secret for AI key delivery |
+| `DATA_PATH` | Optional external storage path |
 
 ## Useful Commands
 
@@ -221,151 +167,44 @@ State file: `docker exec plan-b-license-checker cat /data/license_state.json`
 # Stack status
 docker compose --env-file config.env ps
 
-# Live logs (all services)
+# Live logs
 docker compose --env-file config.env logs -f
 
-# Graylog logs only
-docker compose --env-file config.env logs -f graylog
+# Restart dashboard
+docker restart plan-b-dashboard
 
-# License checker logs
-docker compose --env-file config.env logs -f license-checker
+# Check log count
+docker exec plan-b-opensearch curl -s localhost:9200/logs-*/_count
 
-# Stop the stack
+# Health check
+./resilience/health-check.sh
+
+# Stop everything
 docker compose --env-file config.env down
 
-# Start the stack
+# Start everything
 docker compose --env-file config.env up -d
-
-# Rotate TLS certificate
-rm certs/graylog.{crt,key,csr}
-sudo ./reconfigure.sh
-
-# Check disk usage on external storage
-df -h /mnt/siem-data
-
-# Check OpenSearch index sizes
-docker exec plan-b-opensearch curl -s localhost:9200/_cat/indices?v
 ```
 
----
+## Repository Layout
 
-## Security & Compliance
-
-### Israeli Privacy Protection Law – Amendment 13
-
-| Requirement | Implementation |
-|-------------|----------------|
-| Access control & authentication | Graylog RBAC; admin password SHA-256 hashed |
-| Audit trail | Graylog built-in audit log (`audit_log_enabled = true`) |
-| Log integrity | Daily index rotation + read-only enforcement after rotation; OpenSearch immutable shards |
-| Retention policy | Configurable `RETENTION_DAYS` (default 730); automatic deletion of aged indices |
-| Encryption in transit | TLS 1.2/1.3 on Graylog web UI (self-signed CA) |
-| Data localisation | All data stored on-premises; no cloud sync |
-| Outbound traffic | Only the license check API call (`LICENSE_API_URL`) |
-
-### Hardening checklist (post-install)
-
-- [ ] Change `GRAYLOG_ADMIN_PASSWORD` from default after first login
-- [ ] Create role-based users in Graylog; disable direct admin account for daily use
-- [ ] Restrict firewall: only allow Syslog/GELF ports from known source IPs
-- [ ] Import `certs/ca.crt` into endpoint certificate stores
-- [ ] Schedule periodic backup of Docker volumes (MongoDB + OpenSearch data)
-- [ ] Enable OS disk encryption (`cryptsetup`) for GDPR/Amendment 13 data-at-rest
-
----
-
-## Backup and Restore
-
-### Backup volumes
-
-```bash
-# Stop services gracefully
-docker compose --env-file config.env stop graylog opensearch
-
-# Dump MongoDB
-docker exec plan-b-mongodb mongodump --archive | gzip > backup-mongodb-$(date +%F).gz
-
-# Snapshot OpenSearch data
-# If using DATA_PATH:
-tar czf backup-opensearch-$(date +%F).tar.gz -C ${DATA_PATH:-/var/lib/docker/volumes} opensearch
-
-# If using Docker named volumes:
-docker run --rm -v plan-b_opensearch-data:/data -v $(pwd):/backup \
-    busybox tar czf /backup/backup-opensearch-$(date +%F).tar.gz /data
-
-# Restart
-docker compose --env-file config.env start opensearch graylog
-```
-
-### Restore MongoDB
-
-```bash
-gzip -dc backup-mongodb-YYYY-MM-DD.gz | docker exec -i plan-b-mongodb mongorestore --archive
-```
-
----
-
-## Troubleshooting
-
-**Graylog fails to start (journal error)**
-```bash
-docker compose --env-file config.env logs graylog | grep -i error
-# Common fix: delete corrupt journal
-docker compose --env-file config.env stop graylog
-docker volume rm plan-b_graylog-journal
-docker compose --env-file config.env up -d graylog
-```
-
-**OpenSearch out of disk space**
-```bash
-# Check disk usage
-docker exec plan-b-opensearch curl -s localhost:9200/_cat/indices?v
-# Manually delete oldest index
-docker exec plan-b-opensearch curl -s -X DELETE localhost:9200/graylog_0
-```
-
-**License checker shows EXPIRED but license is renewed**
-```bash
-# Force immediate re-check
-docker restart plan-b-license-checker
-```
-
-**TLS certificate expired**
-```bash
-rm certs/graylog.{crt,key,csr}
-sudo ./reconfigure.sh
-```
-
----
-
-## File Structure
-
-```
+```text
 siem-docker/
-├── docker-compose.yml              # Service definitions
-├── docker-compose.override.yml     # Auto-generated bind mounts (if DATA_PATH set)
-├── config.env.template             # Configuration template
-├── config.env                      # Active config (generated by install.sh)
-├── install.sh                      # First-time installer
-├── reconfigure.sh                  # Apply config changes
-├── UBUNTU-DEPLOY.md                # Ubuntu/Linux deployment guide
-├── WINDOWS-DEPLOY.md               # Windows deployment guide
-├── license-checker/
-│   ├── Dockerfile
-│   ├── checker.py                  # License state machine
-│   └── requirements.txt
-├── graylog/
-│   └── graylog.conf.template       # Graylog config template
-├── certs/
-│   ├── generate-certs.sh           # TLS cert generator
-│   ├── ca.crt                      # Local CA (import into browsers)
-│   ├── graylog.crt                 # Server certificate
-│   └── graylog.key                 # Server private key (chmod 600)
-└── README.md
+├── install-linux.sh              # Linux one-line bootstrap
+├── deploy-ubuntu.sh              # Linux interactive deploy
+├── install.ps1                   # Windows one-line bootstrap
+├── deploy-windows.ps1            # Windows deploy
+├── docker-compose.yml            # Linux compose stack
+├── docker-compose.windows.yml    # Windows/WSL compose stack
+├── config.env.template           # Installer config template
+├── dashboard/                    # Next.js dashboard
+├── syslog-receiver/              # Node.js syslog receiver
+├── license-checker/              # Python license checker
+├── resilience/                   # Health checks and auto-start helpers
+├── UBUNTU-DEPLOY.md
+└── WINDOWS-DEPLOY.md
 ```
-
----
 
 ## Support
 
-Plan-B Systems — https://plan-b.systems
+Plan-B Systems - https://plan-b.systems

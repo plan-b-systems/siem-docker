@@ -32,7 +32,8 @@ if [[ -d "${INSTALL_DIR}/.git" ]]; then
     cd "$INSTALL_DIR"
     rm -f config.env docker-compose.override.yml 2>/dev/null || true
     git fetch origin "$SIEM_BRANCH" 2>&1
-    git checkout -B "$SIEM_BRANCH" "origin/$SIEM_BRANCH" 2>&1
+    git checkout -f "$SIEM_BRANCH" 2>/dev/null || git checkout -f -B "$SIEM_BRANCH" "origin/$SIEM_BRANCH" 2>&1
+    git reset --hard "origin/$SIEM_BRANCH" 2>&1
 else
     echo -e "${GREEN}[OK]${NC}    Cloning repository..."
     git clone -b "$SIEM_BRANCH" https://github.com/plan-b-systems/siem-docker.git "$INSTALL_DIR" 2>&1

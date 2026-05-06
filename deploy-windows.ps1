@@ -40,7 +40,7 @@ function Invoke-WslScript {
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "  Plan-B Systems SIEM v2 - Windows Deployment" -ForegroundColor Cyan
+Write-Host "  Plan-B Systems SIEM v2.1 - Windows Deployment" -ForegroundColor Cyan
 Write-Host "  OpenSearch 2.x + Syslog Receiver + Dashboard" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
@@ -232,11 +232,12 @@ $setupScript = @'
 set -e
 
 SIEM_DIR=/opt/plan-b-siem
+SIEM_BRANCH=${SIEM_BRANCH:-main}
 
 # Clone or update repo (needed for compose file, resilience scripts, config template)
 if [ -d $SIEM_DIR/.git ]; then
     echo "Repo exists, pulling latest..."
-    cd $SIEM_DIR && git fetch origin v2 2>&1 && git checkout v2 2>&1 && git pull origin v2 2>&1 || true
+    cd $SIEM_DIR && git fetch origin "$SIEM_BRANCH" 2>&1 && git checkout "$SIEM_BRANCH" 2>&1 && git pull origin "$SIEM_BRANCH" 2>&1
     rm -f config.env docker-compose.override.yml 2>/dev/null || true
 
     # Clean stale containers
@@ -247,7 +248,7 @@ if [ -d $SIEM_DIR/.git ]; then
     docker volume ls -q --filter name=plan-b-siem_ | xargs -r docker volume rm 2>/dev/null || true
 else
     echo "Cloning repository..."
-    git clone -b v2 https://github.com/plan-b-systems/siem-docker.git $SIEM_DIR 2>&1
+    git clone -b "$SIEM_BRANCH" https://github.com/plan-b-systems/siem-docker.git $SIEM_DIR 2>&1
 fi
 
 cd $SIEM_DIR

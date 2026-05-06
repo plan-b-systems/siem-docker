@@ -1,4 +1,4 @@
-# Plan-B Systems SIEM v2 - Bootstrap Installer
+# Plan-B Systems SIEM v2.1 - Bootstrap Installer
 # Usage: Open PowerShell as Administrator, paste this one-liner:
 #   irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install.ps1 | iex
 
@@ -14,7 +14,7 @@ if (-not $isAdmin) {
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Plan-B Systems SIEM v2 - Installer" -ForegroundColor Cyan
+Write-Host "  Plan-B Systems SIEM v2.1 - Installer" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -26,7 +26,7 @@ $zipFile = "$tempDir\siem-docker.zip"
 try {
     # Download to temp
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-    Write-Host "Downloading siem-docker v2 from GitHub..." -ForegroundColor Yellow
+    Write-Host "Downloading siem-docker v2.1 from GitHub..." -ForegroundColor Yellow
     Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
     Write-Host "  [OK] Downloaded" -ForegroundColor Green
 

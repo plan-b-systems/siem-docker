@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Plan-B Systems SIEM v2 – Linux One-Shot Deployment
+# Plan-B Systems SIEM v2.1 – Linux One-Shot Deployment
 # ============================================================
 # Supports Ubuntu 22.04/24.04, Debian 12, RHEL/Rocky 8+
 #
@@ -22,7 +22,7 @@ die()   { error "$*"; exit 1; }
 
 echo -e "${BOLD}"
 echo "╔══════════════════════════════════════════════════════╗"
-echo "║     Plan-B Systems SIEM v2 – Linux Deployment        ║"
+echo "║     Plan-B Systems SIEM v2.1 – Linux Deployment      ║"
 echo "║     OpenSearch 2.x + Syslog Receiver + Dashboard     ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo -e "${NC}"
@@ -115,20 +115,21 @@ info "Docker is running"
 # ════════════════════════════════════════════════════════════
 # 3. Clone repository
 # ════════════════════════════════════════════════════════════
-step "Cloning SIEM v2 Repository"
+step "Cloning SIEM Repository"
 
 INSTALL_DIR="/opt/plan-b-siem"
+SIEM_BRANCH="${SIEM_BRANCH:-main}"
 
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
     info "Repo exists, cleaning and updating..."
     cd "$INSTALL_DIR"
     # Clean generated artifacts from prior install
     rm -f config.env docker-compose.override.yml 2>/dev/null || true
-    git fetch origin v2 2>&1
-    git checkout v2 2>&1
-    git pull origin v2 2>&1 || true
+    git fetch origin "$SIEM_BRANCH" 2>&1
+    git checkout "$SIEM_BRANCH" 2>&1
+    git pull origin "$SIEM_BRANCH" 2>&1
 else
-    git clone -b v2 https://github.com/plan-b-systems/siem-docker.git "$INSTALL_DIR" 2>&1
+    git clone -b "$SIEM_BRANCH" https://github.com/plan-b-systems/siem-docker.git "$INSTALL_DIR" 2>&1
 fi
 info "Repository ready at ${INSTALL_DIR}"
 
@@ -155,7 +156,7 @@ info "config.env generated"
 # ════════════════════════════════════════════════════════════
 # 5. Run install.sh
 # ════════════════════════════════════════════════════════════
-step "Running SIEM v2 Installer"
+step "Running SIEM Installer"
 
 chmod +x install.sh
 ./install.sh

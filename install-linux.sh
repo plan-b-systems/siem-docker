@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Plan-B Systems SIEM v2 - Linux Bootstrap Installer
+# Plan-B Systems SIEM v2.1 - Linux Bootstrap Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install-linux.sh | sudo bash
 
 set -euo pipefail
@@ -9,13 +9,14 @@ BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
 
 echo -e "${BOLD}"
 echo "╔══════════════════════════════════════════════════════╗"
-echo "║     Plan-B Systems SIEM v2 – Bootstrap Installer     ║"
+echo "║     Plan-B Systems SIEM v2.1 – Bootstrap Installer   ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
 [[ $EUID -ne 0 ]] && { echo -e "${RED}ERROR: Run as root (sudo)${NC}"; exit 1; }
 
 INSTALL_DIR="/opt/plan-b-siem"
+SIEM_BRANCH="${SIEM_BRANCH:-main}"
 
 # Install git if missing
 command -v git &>/dev/null || {
@@ -30,10 +31,10 @@ if [[ -d "${INSTALL_DIR}/.git" ]]; then
     echo -e "${GREEN}[OK]${NC}    Updating existing installation..."
     cd "$INSTALL_DIR"
     rm -f config.env docker-compose.override.yml 2>/dev/null || true
-    git fetch origin main && git checkout main && git pull origin main 2>&1 || true
+    git fetch origin "$SIEM_BRANCH" && git checkout "$SIEM_BRANCH" && git pull origin "$SIEM_BRANCH" 2>&1
 else
     echo -e "${GREEN}[OK]${NC}    Cloning repository..."
-    git clone -b main https://github.com/plan-b-systems/siem-docker.git "$INSTALL_DIR" 2>&1
+    git clone -b "$SIEM_BRANCH" https://github.com/plan-b-systems/siem-docker.git "$INSTALL_DIR" 2>&1
 fi
 
 cd "$INSTALL_DIR"

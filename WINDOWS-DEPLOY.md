@@ -1,4 +1,4 @@
-# Plan-B Systems SIEM v2 — Windows Deployment Guide
+# Plan-B Systems SIEM v2.1 — Windows Deployment Guide
 
 ## Quick Install (One-Liner)
 
@@ -9,7 +9,7 @@ irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install.ps
 ```
 
 The script will:
-1. Download siem-docker v2 from GitHub
+1. Download siem-docker v2.1 from GitHub
 2. Install WSL2 + Docker (if not present)
 3. Prompt for client details (name, ID, LAN IP, password, timezone, retention)
 4. Deploy 4 containers: OpenSearch, Syslog Receiver, Dashboard, License Checker
@@ -35,7 +35,7 @@ After install, access the dashboard at `http://<LAN_IP>:3000`.
 
 ## What Gets Deployed
 
-SIEM v2 runs inside WSL2 (Windows Subsystem for Linux) as a 4-container Docker stack:
+SIEM v2.1 runs inside WSL2 (Windows Subsystem for Linux) as a 4-container Docker stack:
 
 | Container | Purpose | Ports |
 |-----------|---------|-------|

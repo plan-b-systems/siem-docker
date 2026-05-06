@@ -237,7 +237,10 @@ SIEM_BRANCH=${SIEM_BRANCH:-main}
 # Clone or update repo (needed for compose file, resilience scripts, config template)
 if [ -d $SIEM_DIR/.git ]; then
     echo "Repo exists, pulling latest..."
-    cd $SIEM_DIR && git fetch origin "$SIEM_BRANCH" 2>&1 && git checkout -B "$SIEM_BRANCH" "origin/$SIEM_BRANCH" 2>&1
+    cd $SIEM_DIR
+    git fetch origin "$SIEM_BRANCH" 2>&1
+    git checkout -f "$SIEM_BRANCH" 2>/dev/null || git checkout -f -B "$SIEM_BRANCH" "origin/$SIEM_BRANCH" 2>&1
+    git reset --hard "origin/$SIEM_BRANCH" 2>&1
     rm -f config.env docker-compose.override.yml 2>/dev/null || true
 
     # Clean stale containers

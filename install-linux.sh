@@ -30,10 +30,10 @@ if [[ -d "${INSTALL_DIR}/.git" ]]; then
     echo -e "${GREEN}[OK]${NC}    Updating existing installation..."
     cd "$INSTALL_DIR"
     rm -f config.env docker-compose.override.yml 2>/dev/null || true
-    git fetch origin v2 && git checkout v2 && git pull origin v2 2>&1 || true
+    git fetch origin main && git checkout main && git pull origin main 2>&1 || true
 else
     echo -e "${GREEN}[OK]${NC}    Cloning repository..."
-    git clone -b v2 https://github.com/plan-b-systems/siem-docker.git "$INSTALL_DIR" 2>&1
+    git clone -b main https://github.com/plan-b-systems/siem-docker.git "$INSTALL_DIR" 2>&1
 fi
 
 cd "$INSTALL_DIR"

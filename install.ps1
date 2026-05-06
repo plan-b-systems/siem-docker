@@ -20,7 +20,7 @@ Write-Host ""
 
 $installDir = "C:\PlanB-SIEM"
 $tempDir = "$env:TEMP\plan-b-install-$(Get-Random)"
-$zipUrl = "https://github.com/plan-b-systems/siem-docker/archive/refs/heads/v2.zip"
+$zipUrl = "https://github.com/plan-b-systems/siem-docker/archive/refs/heads/main.zip"
 $zipFile = "$tempDir\siem-docker.zip"
 
 try {

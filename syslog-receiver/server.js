@@ -1,5 +1,6 @@
 const dgram = require('node:dgram');
 const net = require('node:net');
+const fs = require('node:fs');
 const { Client } = require('@opensearch-project/opensearch');
 
 // ── Config ──────────────────────────────────────────────
@@ -9,6 +10,15 @@ const OPENSEARCH_URL = process.env.OPENSEARCH_URL || 'http://opensearch:9200';
 const CLIENT_ID = process.env.CLIENT_ID || 'UNKNOWN';
 const CLIENT_NAME = process.env.CLIENT_NAME || 'Unknown Client';
 const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS || '730', 10);
+
+// SentinelOne API puller config (parity with the cloud edr-puller). The
+// integration credentials are delivered by the license-checker to
+// S1_INTEGRATION_FILE; this service polls the S1 API and writes normalized
+// events into the same logs-* indices as syslog.
+const S1_INTEGRATION_FILE = process.env.S1_INTEGRATION_FILE || '/data/s1_integration.json';
+const S1_POLL_INTERVAL_SEC = parseInt(process.env.S1_POLL_INTERVAL_SEC || '300', 10);
+const S1_LOOKBACK_SEC = parseInt(process.env.S1_LOOKBACK_SEC || '900', 10);
+const S1_MAX_EVENTS = parseInt(process.env.S1_MAX_EVENTS || '1000', 10);
 
 // ── OpenSearch client ───────────────────────────────────
 const osClient = new Client({ node: OPENSEARCH_URL });
@@ -234,6 +244,178 @@ async function ensureISMPolicy() {
   }
 }
 
+// ── SentinelOne API puller ──────────────────────────────
+// Reads the integration config the license-checker delivers to
+// S1_INTEGRATION_FILE and polls S1 /threats + /activities, normalizing into
+// the same canonical shape as syslog so the dashboard renders them with no
+// changes. Deterministic _id + _create gives storage-layer dedupe across
+// overlapping polls. Dormant when no config file is present (e.g. before the
+// MSP has provisioned the S1 API token in the portal).
+
+function readS1Config() {
+  try {
+    if (!fs.existsSync(S1_INTEGRATION_FILE)) return null;
+    const cfg = JSON.parse(fs.readFileSync(S1_INTEGRATION_FILE, 'utf-8'));
+    if (!cfg || !cfg.host || !cfg.token || !cfg.site_id) return null;
+    return cfg;
+  } catch (err) {
+    console.error(`[s1] failed to read ${S1_INTEGRATION_FILE}: ${err.message}`);
+    return null;
+  }
+}
+
+function s1NormaliseHost(host) {
+  let h = String(host).replace(/\/+$/, '');
+  if (!h.startsWith('http')) h = `https://${h}`;
+  return h;
+}
+
+function s1SeverityFromClassification(c) {
+  if (!c) return { label: 'warning', code: 4 };
+  const lc = String(c).toLowerCase();
+  if (lc.includes('malware') || lc.includes('ransomware') || lc.includes('exploit')) return { label: 'critical', code: 2 };
+  if (lc.includes('suspicious') || lc.includes('anomaly')) return { label: 'warning', code: 4 };
+  if (lc.includes('benign')) return { label: 'info', code: 6 };
+  return { label: 'warning', code: 4 };
+}
+
+function s1BaseBody(cfg, ts, severity) {
+  // No real source_ip on EDR events — leave it unset (the field is mapped as
+  // `ip` and would reject a non-IP value).
+  return {
+    '@timestamp': ts,
+    client_id: CLIENT_ID,
+    client_name: CLIENT_NAME,
+    source: `SentinelOne · ${cfg.site_name || 'unknown-site'}`,
+    application: 'edr',
+    facility: 'local0',
+    facility_code: 16,
+    severity: severity.label,
+    severity_code: severity.code,
+    device_vendor: 'sentinelone',
+    device_product: 'singularity',
+    event_category: 'edr',
+    ingest_source: 'edr-puller',
+    ingested_at: new Date().toISOString(),
+  };
+}
+
+function s1ThreatToDoc(cfg, t) {
+  const ts = t.createdAt || t.updatedAt || new Date().toISOString();
+  const cls = t.threatInfo && t.threatInfo.classification;
+  const sev = s1SeverityFromClassification(cls);
+  return {
+    id: `s1-threat-${t.id}`,
+    timestamp: ts,
+    body: {
+      ...s1BaseBody(cfg, ts, sev),
+      event_action: 'threat',
+      event_subtype: cls || 'unknown',
+      hostname: (t.agentRealtimeInfo && t.agentRealtimeInfo.agentComputerName) || null,
+      message: (t.threatInfo && t.threatInfo.threatName) || 'S1 threat detected',
+      raw: JSON.stringify(t),
+    },
+  };
+}
+
+function s1ActivityToDoc(cfg, a) {
+  const ts = a.createdAt || new Date().toISOString();
+  const sev = { label: 'info', code: 6 };
+  return {
+    id: `s1-activity-${a.id}`,
+    timestamp: ts,
+    body: {
+      ...s1BaseBody(cfg, ts, sev),
+      event_action: 'activity',
+      event_subtype: String(a.activityType != null ? a.activityType : 'unknown'),
+      hostname: a.agentName || null,
+      message: a.primaryDescription || 'S1 activity',
+      raw: JSON.stringify(a),
+    },
+  };
+}
+
+async function s1Get(host, token, path) {
+  const res = await fetch(`${s1NormaliseHost(host)}${path}`, {
+    headers: { Authorization: `ApiToken ${token}`, Accept: 'application/json' },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    const err = new Error(`S1 GET ${res.status}: ${body.slice(0, 200)}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+async function s1WriteDoc(doc) {
+  // Index by the event's own month, matching the syslog convention + ISM policy.
+  const yyyymm = doc.timestamp.slice(0, 7).replace('-', '.');
+  const index = `logs-${CLIENT_ID.toLowerCase()}-${yyyymm}`;
+  try {
+    await osClient.create({ index, id: doc.id, body: doc.body });
+    return 'written';
+  } catch (err) {
+    const status = (err.meta && err.meta.statusCode) || err.statusCode;
+    if (status === 409) return 'duplicate'; // already written by an overlapping poll
+    console.error(`[s1] write failed for ${doc.id}: ${err.message}`);
+    return 'failed';
+  }
+}
+
+let s1Running = false;
+
+async function s1PollCycle() {
+  const cfg = readS1Config();
+  if (!cfg) return; // dormant — no integration delivered yet
+  if (s1Running) return; // previous cycle still in flight
+  s1Running = true;
+  try {
+    const sinceIso = new Date(Date.now() - S1_LOOKBACK_SEC * 1000).toISOString();
+    const half = Math.floor(S1_MAX_EVENTS / 2);
+    const siteId = encodeURIComponent(cfg.site_id);
+    const since = encodeURIComponent(sinceIso);
+    const feeds = [
+      { label: 'threats', toDoc: s1ThreatToDoc,
+        path: `/web/api/v2.1/threats?siteIds=${siteId}&createdAt__gte=${since}&limit=${half}&sortBy=createdAt&sortOrder=desc` },
+      { label: 'activities', toDoc: s1ActivityToDoc,
+        path: `/web/api/v2.1/activities?siteIds=${siteId}&createdAt__gte=${since}&limit=${half}&sortBy=createdAt&sortOrder=desc` },
+    ];
+
+    let written = 0, duplicates = 0, failed = 0;
+    // Pull each feed independently — a read-only token often 403s on /threats
+    // but can still read /activities; one feed's gap must not drop the other.
+    for (const feed of feeds) {
+      try {
+        const res = await s1Get(cfg.host, cfg.token, feed.path);
+        const data = (res && res.data) || [];
+        for (const item of data) {
+          const r = await s1WriteDoc(feed.toDoc(cfg, item));
+          if (r === 'written') written++;
+          else if (r === 'duplicate') duplicates++;
+          else failed++;
+        }
+      } catch (err) {
+        if (err.status === 403) {
+          console.warn(`[s1] ${feed.label} feed not permitted (403) — grant "${feed.label === 'threats' ? 'Threats' : 'Activity'}: View" to the SentinelOne API user`);
+        } else {
+          console.error(`[s1] ${feed.label} feed pull failed: ${err.message}`);
+        }
+      }
+    }
+    console.log(`[s1] cycle: written=${written} duplicates=${duplicates} failed=${failed} site=${cfg.site_id}`);
+  } finally {
+    s1Running = false;
+  }
+}
+
+function startS1Poller() {
+  // First cycle 15s after boot (let OpenSearch settle), then every interval.
+  setTimeout(() => { s1PollCycle().catch((e) => console.error(`[s1] cycle error: ${e.message}`)); }, 15_000);
+  setInterval(() => { s1PollCycle().catch((e) => console.error(`[s1] cycle error: ${e.message}`)); }, S1_POLL_INTERVAL_SEC * 1000);
+  console.log(`[s1] poller armed — interval ${S1_POLL_INTERVAL_SEC}s, lookback ${S1_LOOKBACK_SEC}s, config ${S1_INTEGRATION_FILE}`);
+}
+
 // ── Handle incoming syslog message ──────────────────────
 function handleMessage(data, sourceIP) {
   const parsed = parseSyslog(data);
@@ -336,6 +518,7 @@ async function start() {
 
   await ensureIndexTemplate();
   await ensureISMPolicy();
+  startS1Poller();
 }
 
 start();

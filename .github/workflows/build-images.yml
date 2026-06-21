@@ -2,13 +2,15 @@ name: Build and Push Docker Images
 
 on:
   push:
-    branches: [v2]
+    branches: [main]
     paths:
       - 'syslog-receiver/**'
       - 'dashboard/**'
       - 'license-checker/**'
       - 'docker-compose.yml'
+      - 'docker-compose.windows.yml'
       - '.github/workflows/build-images.yml'
+  workflow_dispatch: {}
 
 env:
   REGISTRY: ghcr.io

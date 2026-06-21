@@ -310,6 +310,7 @@ On-Prem                                    Cloud (siemsys)
 | 13 | Encrypted on-prem↔cloud API | 2026-04-07 | Approved |
 | 14 | API key rotation process | 2026-04-07 | Approved |
 | 15 | Multi-user auth, tier 2 (SQLite + TOTP MFA + lockout + audit + self-service reset) | 2026-04-22 | Approved |
+| 16 | SentinelOne (EDR) ingestion — built-in, portal-delivered credentials | 2026-06-21 | Approved |
 
 ---
 
@@ -399,3 +400,38 @@ On-Prem                                    Cloud (siemsys)
 - `dashboard/scripts/reset-admin.js` + `scripts/reset-admin.sh` (emergency CLI)
 
 **Supersedes decision 6** ("Password + JWT auth") — JWT is retained but is no longer the whole story; the DB is now the source of truth for session liveness.
+
+---
+
+## 16. SentinelOne (EDR) Ingestion — built-in, portal-delivered credentials
+
+**Decision (2026-06-21):** Add SentinelOne API ingestion to the on-prem stack as
+a built-in capability of the existing ingestion service (the syslog receiver),
+NOT a separate puller container. Credentials are delivered from the cloud portal
+via the license-checker (sealed to the install's X25519 key) — never entered or
+stored on the box in a settings UI.
+
+**Why:**
+- Product parity with Cloud SIEM (which pulls S1 via its `edr-puller`), as one
+  closed product with all capabilities included — no bolt-on container.
+- Portal-delivery removes both cloud-couplings the cloud puller has: the box
+  needs neither `MDR_ENCRYPTION_KEY` nor a multi-tenant DB lookup. The portal
+  does the lookup + AES-GCM decrypt and re-seals to the install's key; the box
+  just reads a JSON file and polls.
+- The MSP manages the integration centrally in the portal (impersonate → MDR →
+  Integrations), matching how they manage everything else for the client.
+
+**Alternatives rejected:**
+- *Separate edr-puller container on-prem:* fragments the product; the call was
+  one closed stack with every capability built in.
+- *Enter the token in the on-prem dashboard:* puts a plaintext cloud credential
+  on the customer box and duplicates portal functionality. Portal-delivery keeps
+  the secret off the box.
+
+**Implementation:** `syslog-receiver/server.js` (poll loop + normalizer ported
+from the cloud edr-puller, `_create` dedupe, independent per-feed pulls),
+`license-checker/checker.py` (sealed-box decrypt → `/data/s1_integration.json`),
+compose mounts `license-data:/data:ro` on the ingestion service. Pairs with
+pbsiem `/api/license/check` delivering `s1_integration_sealed`. **M365 ingestion
+is the planned next capability** (heavier: needs an app-only OAuth flow rather
+than the portal's interactive per-tenant consent).

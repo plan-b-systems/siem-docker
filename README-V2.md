@@ -143,6 +143,34 @@ end
 
 ---
 
+## SentinelOne (EDR) Ingestion
+
+Beyond syslog, the stack pulls **SentinelOne** EDR telemetry via the S1 API —
+full parity with the Cloud SIEM, built into the existing ingestion service (no
+extra container). Threats + activities land in the same `logs-*` indices and
+appear in the dashboard alongside syslog events.
+
+**Credentials are delivered by the cloud portal — never typed or stored on the
+box.** The MSP/admin enters the SentinelOne integration (console URL + API token
++ site ID) once in the Plan-B portal against the client. The portal delivers it
+**encrypted** in the daily license check; the license-checker decrypts it with
+the install's own X25519 key and writes `/data/s1_integration.json`. The
+ingestion service reads that file and polls. The box never holds the cloud
+encryption key.
+
+- Dormant until the portal delivers credentials; stops automatically if the
+  integration is removed or the install is paused (IP mismatch / inactive).
+- Read-only S1 tokens are fine — `/activities` ingests even when `/threats` is
+  permission-gated (403).
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `S1_POLL_INTERVAL_SEC` | Poll cadence | `300` (5 min) |
+| `S1_LOOKBACK_SEC` | Per-poll lookback (overlap for dedupe) | `900` (15 min) |
+| `S1_INTEGRATION_FILE` | Delivered config path (shared volume) | `/data/s1_integration.json` |
+
+---
+
 ## License Checker
 
 Validates the Plan-B subscription **daily at 12:00 local time**.

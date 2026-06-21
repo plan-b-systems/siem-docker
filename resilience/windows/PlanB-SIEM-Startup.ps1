@@ -54,7 +54,7 @@ if ($elapsed -ge $timeout) {
 
 # ── 3. Start SIEM containers ──
 Write-Log "Starting SIEM stack..."
-wsl.exe -d $distro -u root -- bash -c "cd /opt/plan-b-siem && docker compose -f docker-compose.windows.yml --env-file config.env up -d 2>&1" 2>&1 | Out-Null
+wsl.exe -d $distro -u root -- bash -c "cd /opt/plan-b-siem && OV=''; [ -f docker-compose.override.yml ] && OV='-f docker-compose.override.yml'; docker compose -f docker-compose.windows.yml `$OV --env-file config.env up -d 2>&1" 2>&1 | Out-Null
 
 # Wait for OpenSearch healthy
 $timeout = 300

@@ -20,6 +20,7 @@ networks:
 volumes:
   opensearch-data:
   license-data:
+  dashboard-data:
 
 services:
 
@@ -131,11 +132,13 @@ services:
       RETENTION_DAYS: "${RETENTION_DAYS:-730}"
       LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.systems/api/license/check}"
       AI_KEY_FILE: "/data/ai_key.json"
+      AUTH_DB_PATH: "/auth-data/users.db"
       HOSTNAME: "0.0.0.0"
       NODE_ENV: "production"
       TZ: "${TIMEZONE:-Asia/Jerusalem}"
     volumes:
       - license-data:/data:ro
+      - dashboard-data:/auth-data
     ports:
       - "${BIND_ADDRESS:-0.0.0.0}:${DASHBOARD_PORT:-3000}:3000"
     healthcheck:

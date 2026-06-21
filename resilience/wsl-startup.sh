@@ -66,8 +66,16 @@ if [[ -f docker-compose.windows.yml ]] && grep -qi microsoft /proc/version 2>/de
     COMPOSE_FILE="docker-compose.windows.yml"
 fi
 
+# Include the per-install override (DATA_PATH external-disk mount) when present.
+# Compose does NOT auto-merge docker-compose.override.yml once an explicit -f is
+# passed, so we add it by hand or DATA_PATH silently reverts on every reboot.
+OVERRIDE_ARGS=()
+if [[ -f docker-compose.override.yml ]]; then
+    OVERRIDE_ARGS=(-f docker-compose.override.yml)
+fi
+
 log "Starting SIEM stack from ${SIEM_DIR} (${COMPOSE_FILE})..."
-docker compose -f "$COMPOSE_FILE" --env-file config.env up -d 2>&1
+docker compose -f "$COMPOSE_FILE" ${OVERRIDE_ARGS[@]+"${OVERRIDE_ARGS[@]}"} --env-file config.env up -d 2>&1
 EXIT_CODE=$?
 
 if [[ $EXIT_CODE -eq 0 ]]; then
@@ -78,7 +86,7 @@ else
     log "Retrying after second cleanup..."
     bash "${SIEM_DIR}/resilience/clean-stale-processes.sh" 2>&1
     sleep 3
-    docker compose -f "$COMPOSE_FILE" --env-file config.env up -d 2>&1
+    docker compose -f "$COMPOSE_FILE" ${OVERRIDE_ARGS[@]+"${OVERRIDE_ARGS[@]}"} --env-file config.env up -d 2>&1
     EXIT_CODE=$?
     if [[ $EXIT_CODE -eq 0 ]]; then
         log "SIEM stack started on retry"
@@ -87,12 +95,12 @@ else
     fi
 fi
 
-# ── Wait for Graylog health then log status ──
-log "Waiting for Graylog to become healthy..."
+# ── Wait for OpenSearch health then log status ──
+log "Waiting for OpenSearch to become healthy..."
 TIMEOUT=300
 ELAPSED=0
 while [[ $ELAPSED -lt $TIMEOUT ]]; do
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' plan-b-graylog 2>/dev/null || echo "unknown")
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' plan-b-opensearch 2>/dev/null || echo "unknown")
     if [[ "$STATUS" == "healthy" ]]; then
         break
     fi

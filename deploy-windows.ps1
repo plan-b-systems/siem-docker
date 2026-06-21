@@ -94,6 +94,19 @@ $heapSize = [math]::Max(1, [math]::Floor($totalRAM / 4))
 $HEAP = "${heapSize}g"
 Write-Ok "Detected ${totalRAM} GB RAM -> OpenSearch heap: ${HEAP}"
 
+# WSL2 caps its VM at 50% of host RAM by default, which starves OpenSearch + page
+# cache (a 24 GB box only gives the SIEM 12 GB). Give WSL most of the box, leaving
+# ~4 GB for Windows. Written before WSL first boots so it applies immediately.
+# We don't clobber a pre-existing hand-tuned .wslconfig.
+$wslMem = [math]::Max(4, $totalRAM - 4)
+$wslConfigPath = "$env:USERPROFILE\.wslconfig"
+if (-not (Test-Path $wslConfigPath)) {
+    Set-Content -Path $wslConfigPath -Value "[wsl2]`nmemory=${wslMem}GB`n" -Encoding ascii
+    Write-Ok "WSL2 memory limit set to ${wslMem} GB (.wslconfig)"
+} else {
+    Write-Warn "Existing .wslconfig left as-is — ensure [wsl2] memory >= ${wslMem}GB for best performance"
+}
+
 $DATA_PATH_RAW = Read-Host -Prompt "  External data path, e.g. D:\SIEMData [leave empty for Docker volumes]"
 
 # Convert Windows path (D:\SIEMData) to WSL path (/mnt/d/SIEMData)
@@ -354,6 +367,9 @@ services:
     volumes:
       - ${DATA_PATH}/opensearch:/usr/share/opensearch/data
 OVERRIDE
+    # Compose won't auto-merge the override once an explicit -f is passed, so add it
+    # to every compose invocation here or DATA_PATH silently reverts (incl. on reboot).
+    COMPOSE="docker compose -f docker-compose.windows.yml -f docker-compose.override.yml --env-file config.env"
 fi
 
 # Start OpenSearch first, wait for healthy

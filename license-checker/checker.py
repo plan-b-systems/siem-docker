@@ -66,6 +66,7 @@ GRACE_PERIOD_DAYS    = int(os.environ.get("GRACE_PERIOD_DAYS", "7"))
 STATE_FILE           = Path(os.environ.get("STATE_FILE",   "/data/license_state.json"))
 LOG_FILE             = Path(os.environ.get("LOG_FILE",     "/data/license_checker.log"))
 AI_KEY_FILE          = Path(os.environ.get("AI_KEY_FILE",  "/data/ai_key.json"))
+S1_INTEGRATION_FILE  = Path(os.environ.get("S1_INTEGRATION_FILE", "/data/s1_integration.json"))
 TZ_NAME              = os.environ.get("TZ",                "UTC")
 SYSLOG_CONTAINER     = os.environ.get("SYSLOG_CONTAINER",     "plan-b-syslog")
 OPENSEARCH_CONTAINER = os.environ.get("OPENSEARCH_CONTAINER", "plan-b-opensearch")
@@ -363,6 +364,38 @@ def remove_ai_key() -> None:
     except Exception as exc:
         log.error("Failed to remove AI key: %s", exc)
 
+# ── SentinelOne integration config persistence ────────────────────────────
+# Delivered by the portal sealed (X25519) like the AI key. The ingestion
+# service (plan-b-syslog) reads this file and pulls the S1 API. The on-prem
+# box never holds MDR_ENCRYPTION_KEY — the portal decrypts the token and
+# re-seals it to this install's encrypt key.
+
+def save_s1_integration(config_json: str) -> None:
+    """Write the decrypted S1 integration config to the shared volume.
+    `config_json` is the JSON the portal sealed: {host, token, site_id, site_name}."""
+    try:
+        cfg = json.loads(config_json)
+        cfg["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        S1_INTEGRATION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(S1_INTEGRATION_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        try:
+            os.chmod(S1_INTEGRATION_FILE, 0o600)
+        except Exception:
+            pass
+        log.info("S1 integration config saved (host=%s site_id=%s)",
+                 cfg.get("host"), cfg.get("site_id"))
+    except Exception as exc:
+        log.error("Failed to save S1 integration config: %s", exc)
+
+def remove_s1_integration() -> None:
+    try:
+        if S1_INTEGRATION_FILE.exists():
+            S1_INTEGRATION_FILE.unlink()
+            log.info("S1 integration config removed — on-prem S1 ingestion will stop")
+    except Exception as exc:
+        log.error("Failed to remove S1 integration config: %s", exc)
+
 # ══════════════════════════════════════════════════════════════════════════
 # License API — v2 signed flow
 # ══════════════════════════════════════════════════════════════════════════
@@ -536,6 +569,21 @@ def call_license_api(
         # IP mismatch or grace-elapsed signals → remove AI key
         if data.get("ip_mismatch") or not active:
             remove_ai_key()
+
+        # SentinelOne integration config — delivered sealed like the AI key.
+        # The field is present only when the portal has an ACTIVE S1
+        # integration for this client AND the install is authenticated +
+        # IP-matched. Absence (no integration, ip_mismatch, inactive) means
+        # stop pulling — remove the local config so the ingestion service
+        # goes dormant.
+        if data.get("s1_integration_sealed"):
+            try:
+                s1_cfg = sealed_box_decrypt(data["s1_integration_sealed"], enc_priv)
+                save_s1_integration(s1_cfg)
+            except Exception as exc:
+                log.error("Failed to decrypt sealed-box S1 integration: %s", exc)
+        else:
+            remove_s1_integration()
 
         return True, active, expires, data
 

@@ -90,6 +90,13 @@ services:
       CLIENT_NAME: "${CLIENT_NAME}"
       RETENTION_DAYS: "${RETENTION_DAYS:-730}"
       TZ: "${TIMEZONE:-Asia/Jerusalem}"
+      # SentinelOne API puller — reads the integration config the license-checker
+      # delivers to this path on the shared license-data volume (read-only mount).
+      S1_INTEGRATION_FILE: "/data/s1_integration.json"
+      S1_POLL_INTERVAL_SEC: "${S1_POLL_INTERVAL_SEC:-300}"
+      S1_LOOKBACK_SEC: "${S1_LOOKBACK_SEC:-900}"
+    volumes:
+      - license-data:/data:ro
     ports:
       - "0.0.0.0:${SYSLOG_UDP_PORT:-514}:514/udp"
       - "0.0.0.0:${SYSLOG_TCP_PORT:-1514}:1514/tcp"
@@ -194,6 +201,7 @@ services:
       STATE_FILE: "/data/license_state.json"
       LOG_FILE: "/data/license_checker.log"
       AI_KEY_FILE: "/data/ai_key.json"
+      S1_INTEGRATION_FILE: "/data/s1_integration.json"
       TZ: "${TIMEZONE:-Asia/Jerusalem}"
     logging:
       driver: "json-file"

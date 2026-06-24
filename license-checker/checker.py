@@ -67,6 +67,9 @@ STATE_FILE           = Path(os.environ.get("STATE_FILE",   "/data/license_state.
 LOG_FILE             = Path(os.environ.get("LOG_FILE",     "/data/license_checker.log"))
 AI_KEY_FILE          = Path(os.environ.get("AI_KEY_FILE",  "/data/ai_key.json"))
 S1_INTEGRATION_FILE  = Path(os.environ.get("S1_INTEGRATION_FILE", "/data/s1_integration.json"))
+# Tiny status file the dashboard reads (read-only mount) to render the
+# "not connected to portal" banner. Lives on the shared license-data volume.
+PORTAL_STATUS_FILE   = Path(os.environ.get("PORTAL_STATUS_FILE", "/data/portal_status.json"))
 TZ_NAME              = os.environ.get("TZ",                "UTC")
 SYSLOG_CONTAINER     = os.environ.get("SYSLOG_CONTAINER",     "plan-b-syslog")
 OPENSEARCH_CONTAINER = os.environ.get("OPENSEARCH_CONTAINER", "plan-b-opensearch")
@@ -281,6 +284,29 @@ def save_state(state: dict) -> None:
     except Exception as exc:
         log.error("Failed to save state file: %s", exc)
 
+
+def write_portal_status(state: dict, *, authenticated: bool | None, last_error: str | None) -> None:
+    """Tiny status file the dashboard reads (read-only mount) to render the
+    'not connected to portal' banner. Always overwrite — never append.
+    Mirrors the write style of save_ai_key / save_s1_integration: best-effort,
+    never raises (a status-write failure must never break a license-check)."""
+    try:
+        payload = {
+            "client_id": CLIENT_ID,
+            "bootstrapped": bool(state.get("bootstrapped")),
+            "authenticated": authenticated if authenticated is not None else state.get("authenticated"),
+            "license_status": state.get("status"),
+            "last_check": state.get("last_check"),
+            "failed_bootstrap_count": int(state.get("failed_bootstrap_count", 0)),
+            "last_error": last_error,
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        PORTAL_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(PORTAL_STATUS_FILE, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+    except Exception as exc:
+        log.error("Failed to write portal status file: %s", exc)
+
 # ── Docker helpers (unchanged from v1) ───────────────────────────────────
 
 def _docker_client():
@@ -486,6 +512,9 @@ def call_license_api(
         expires = data.get("expiry_date") or data.get("expires") or "unknown"
         authenticated = bool(data.get("authenticated", False))
         ip_mismatch   = bool(data.get("ip_mismatch", False))
+        # Persist the portal's authenticated verdict so the dashboard banner +
+        # health report can read it from state (load_state tolerates the new key).
+        state["authenticated"] = authenticated
         log.info(
             "API response: purpose=%s active=%s authenticated=%s expires=%s%s",
             purpose, active, authenticated, expires,
@@ -495,7 +524,19 @@ def call_license_api(
         # Bootstrap success — persist keys as "registered", next call is "check"
         if purpose == "bootstrap" and authenticated:
             state["bootstrapped"] = True
+            state["failed_bootstrap_count"] = 0
             log.info("Bootstrap accepted — keys registered with portal")
+
+        # Bootstrap rejected by portal — track the failure so the dashboard
+        # banner can surface how many attempts have been refused. This is the
+        # "no pending installation slot" / closed-window case: the box keeps
+        # checking in with authenticated=false and delivers nothing.
+        if purpose == "bootstrap" and not authenticated:
+            state["failed_bootstrap_count"] = int(state.get("failed_bootstrap_count", 0)) + 1
+            log.error(
+                "Bootstrap REJECTED by portal (attempt #%d): %s",
+                state["failed_bootstrap_count"], data.get("message", "no message"),
+            )
 
         # Rotation accepted — swap to new keys atomically
         if purpose == "rotate" and data.get("rotated") and new_sign_priv and new_enc_priv:
@@ -704,6 +745,13 @@ def collect_health() -> dict:
         metrics["dashboard_status"] = _get_container_status(client, DASHBOARD_CONTAINER)
         metrics["license_checker_status"] = "running"
         metrics.update(_get_opensearch_stats(client))
+    # Portal connection status — lets the fleet health view see un-bootstrapped /
+    # unauthenticated boxes in the hourly health report.
+    st = load_state()
+    metrics["bootstrapped"] = bool(st.get("bootstrapped"))
+    metrics["authenticated"] = bool(st.get("authenticated"))
+    metrics["license_status"] = st.get("status")
+    metrics["failed_bootstrap_count"] = int(st.get("failed_bootstrap_count", 0))
     return metrics
 
 def send_health_report() -> None:
@@ -816,6 +864,18 @@ def run_license_check() -> None:
             log.warning("STATE → GRACE_PERIOD  (API unreachable – %d day grace window started)", GRACE_PERIOD_DAYS)
 
     save_state(state)
+
+    # Always refresh the dashboard-facing status file so the "not connected to
+    # portal" banner reflects reality on every cycle — even when the API was
+    # unreachable (api_ok=False) and authenticated could not be refreshed.
+    last_err = None
+    if not bool(state.get("bootstrapped")):
+        prev_result = state.get("last_result")
+        if isinstance(prev_result, dict):
+            last_err = prev_result.get("message")
+        last_err = last_err or "bootstrap pending — portal has not accepted this install"
+    write_portal_status(state, authenticated=state.get("authenticated"), last_error=last_err)
+
     log.info("Check complete  |  new state=%s  |  bootstrapped=%s  |  rotation_pending=%s",
              state["status"], state.get("bootstrapped", False), state.get("rotation_pending", False))
     log.info("─" * 60)

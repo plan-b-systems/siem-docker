@@ -15,6 +15,10 @@ export const translations = {
   'nav.account': { he: 'חשבון', en: 'Account' },
   'nav.changePassword': { he: 'שנה סיסמה', en: 'Change password' },
 
+  // Portal connection banner
+  'portal.notConnected': { he: 'לא מחובר לפורטל — האתחול בהמתנה', en: 'NOT CONNECTED TO PORTAL — bootstrap pending' },
+  'portal.notConnectedDetail': { he: 'ההתקנה הזו עדיין לא אומתה מול הפורטל של Plan-B. ניהול רישיון ומפתחות AI אינם פעילים עד שהאתחול יסתיים.', en: 'This installation has not yet authenticated with the Plan-B portal. License management and AI features are inactive until bootstrap completes.' },
+
   // Login
   'login.title': { he: 'לוח בקרה SIEM', en: 'SIEM Dashboard' },
   'login.subtitle': { he: 'הזן סיסמת מנהל להמשך', en: 'Enter admin password to continue' },

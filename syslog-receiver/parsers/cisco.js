@@ -10,7 +10,14 @@
 
 'use strict'
 
+const { normProto } = require('./util')
+
 const FRAME_RE = /%([A-Z][A-Z0-9_]*)-(\d)-([A-Z0-9_]+):\s*(.*)$/
+
+// Protocol token as it appears in an ASA body, e.g. "Deny tcp src ...",
+// "Built outbound TCP connection", "for udp". We pull the proto word and run it
+// through normProto so network_protocol is consistent with every other parser.
+const ASA_PROTO_RE = /\b(tcp|udp|icmp|icmpv6|gre|esp|ah|sctp|ip)\b/i
 
 function detect(msg) {
   return FRAME_RE.test(msg)
@@ -135,6 +142,13 @@ function parse(msg) {
   if ((facility === 'AUTH' || facility === 'AAA') && !base.event_category) {
     base.event_category = 'auth'
     base.event_action = /\bfail/i.test(body) ? 'failure' : 'success'
+  }
+
+  // Fix #2 / #7 — extract protocol from the ASA/IOS body when not already set
+  // by a flow-event mnemonic. e.g. "Deny tcp src ..." → network_protocol=tcp.
+  if (!base.network_protocol) {
+    const pm = body.match(ASA_PROTO_RE)
+    if (pm) base.network_protocol = normProto(pm[1])
   }
 
   return base

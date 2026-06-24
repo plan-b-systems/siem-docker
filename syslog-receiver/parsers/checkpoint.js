@@ -32,9 +32,19 @@
 //   * product= naming a Check Point blade, OR
 //   * originsicname= (SIC name is unique to Check Point), OR
 //   * the literal "CheckPoint" / "Check Point" token in the syslog header, OR
-//   * Check Point's classic "loc=<n> ... action=" combined with src=/dst=.
+//   * Check Point's classic "loc=<n> ... action=" combined with src=/dst=, OR
+//   * (Fix #6) a marker-stripped CP key=value line: a Check-Point action verb
+//     (Accept/Drop/Reject/Block/Encrypt/...) together with a CP-specific field
+//     (rule=/s_port=/service=) AND src=/dst=. FortiGate uses srcport=/dstport=/
+//     policyid= and ALWAYS carries devname=/logid=, so we explicitly reject any
+//     line bearing those FortiGate markers to keep the disambiguation test green.
+//   * (Fix #6) Check Point Log-Exporter BRACKET/COLON format:
+//        [action:"Drop"; src:"1.2.3.4"; dst:"5.6.7.8"; ... ]
+//     — semicolon-separated key:"value"; pairs inside square brackets.
 
 'use strict'
+
+const { normProto } = require('./util')
 
 // key=value where the value is either a quoted string or a run of
 // non-space characters. Quoted values may contain spaces (e.g. rule_name).
@@ -45,9 +55,44 @@ const KV_REGEX = /([\w.\-]+)=("[^"]*"|[^\s;]+)/g
 
 const CP_PRODUCT_MARKERS = /\b(?:VPN-1|FireWall-1|Threat\s*Emulation|Threat\s*Extraction|Anti[-\s]?Bot|Anti[-\s]?Virus|Application\s*Control|URL\s*Filtering|IPS|Identity\s*Awareness|SmartDefense|Mobile\s*Access|DLP|Endpoint|Quantum|Harmony|SandBlast)\b/i
 
+// Check Point action verbs (the canonical Log-Exporter "action" values). Used
+// by the marker-stripped fallback detection so a CP line with no product token
+// is still claimed when it clearly carries a CP action + CP-shaped fields.
+const CP_ACTION_VERBS = /\b(?:Accept|Drop|Reject|Block|Prevent|Detect|Encrypt|Decrypt|Bypass|Inspect|Monitor|Ask|Inline|Redirect|Quarantine)\b/i
+
+// FortiGate-only markers — if present, this is FortiGate (which has its own
+// parser running AFTER us via server.js) and we MUST NOT claim it. Keeps the
+// "Check Point detect() does NOT claim a FortiGate line" disambiguation green.
+const FORTI_MARKERS = /\b(?:devname=|logid=|srcport=|dstport=|policyid=|devid=)/i
+
+// Bracket/colon Log-Exporter pair: key:"value" (semicolon-separated, inside []).
+const BRACKET_KV_REGEX = /([\w.\-]+):"([^"]*)"/g
+
+// True iff the line looks like the bracketed key:"value"; Log-Exporter format
+// AND carries an action plus a src/dst — distinctive enough to be CP-only.
+function isBracketFormat(msg) {
+  if (!/\[[^\]]*:"/.test(msg)) return false // must have [ ... key:"... ]
+  const hasAction = /\baction:"[^"]*"/i.test(msg)
+  const hasEndpoint = /\bsrc:"[^"]*"/i.test(msg) || /\bdst:"[^"]*"/i.test(msg)
+  return hasAction && hasEndpoint
+}
+
+// Parse the bracket/colon format into the SAME lowercased kv shape kvParse()
+// produces, so the rest of parse() is format-agnostic.
+function bracketParse(msg) {
+  const kv = {}
+  BRACKET_KV_REGEX.lastIndex = 0
+  let m
+  while ((m = BRACKET_KV_REGEX.exec(msg)) !== null) {
+    const key = m[1].toLowerCase()
+    if (kv[key] === undefined) kv[key] = m[2]
+  }
+  return kv
+}
+
 function detect(msg) {
-  // Cheap reject: must look like key=value at all.
-  if (!/=/.test(msg)) return false
+  // Cheap reject: must look like key=value OR key:"value" at all.
+  if (!/[=:]/.test(msg)) return false
 
   // Strong, Check-Point-unique markers.
   if (/\boriginsicname=/i.test(msg)) return true
@@ -61,6 +106,22 @@ function detect(msg) {
   // Classic Check Point shape: loc=<digits> together with action= and src=/dst=.
   // FortiGate never emits loc=; this disambiguates from Forti key=value.
   if (/\bloc=\d+/.test(msg) && /\baction=/i.test(msg) && (/\bsrc=/i.test(msg) || /\bdst=/i.test(msg))) {
+    return true
+  }
+
+  // Fix #6 — Check Point Log-Exporter BRACKET/COLON format:
+  //   [action:"Drop"; src:"1.2.3.4"; dst:"5.6.7.8"; proto:"6"; ... ]
+  // Distinctive enough (square-bracketed key:"value"; pairs with an action +
+  // src/dst) that no other vendor in our stack uses it.
+  if (isBracketFormat(msg) && !FORTI_MARKERS.test(msg)) return true
+
+  // Fix #6 — marker-stripped CP key=value: a Check Point action verb + a
+  // CP-shaped field (rule= / s_port= / service=) + src=/dst=. Reject anything
+  // bearing FortiGate-only markers so we never steal FortiGate.
+  if (CP_ACTION_VERBS.test(msg) &&
+      (/\brule=/i.test(msg) || /\bs_port=/i.test(msg) || /\bservice=/i.test(msg)) &&
+      (/\bsrc=/i.test(msg) || /\bdst=/i.test(msg)) &&
+      !FORTI_MARKERS.test(msg)) {
     return true
   }
   return false
@@ -80,23 +141,14 @@ function kvParse(msg) {
   return kv
 }
 
-// Check Point action → normalized event_action (lowercased, canonical).
-// Keeps the original casing semantics but normalizes to lower for consistency
-// with the other parsers (FortiGate emits "deny"/"accept" lowercase).
-function normAction(a) {
-  if (!a) return null
-  return String(a).toLowerCase()
-}
-
-// Protocol can arrive as a name ("tcp") or an IANA number ("6"). Normalize
-// numbers to names so downstream rules can match a single value.
-function normProto(p) {
-  if (!p) return null
-  const s = String(p).toLowerCase()
-  if (s === '6') return 'tcp'
-  if (s === '17') return 'udp'
-  if (s === '1') return 'icmp'
-  return s
+// EVENT_ACTION POLICY (Fix #8): keep the RAW vendor verb, matching cef.js /
+// leef.js / fortigate.js and the cloud receiver. Check Point's Log-Exporter
+// emits its own casing ("Drop"/"Accept"); we pass it through unchanged so MDR
+// rules see the same verb the device emitted (FortiGate happens to emit lower
+// already, so the cross-vendor verb space is the vendor's native spelling).
+function rawAction(a) {
+  if (a == null || a === '') return null
+  return String(a)
 }
 
 function toInt(v) {
@@ -106,7 +158,9 @@ function toInt(v) {
 }
 
 function parse(msg) {
-  const kv = kvParse(msg)
+  // Bracket/colon Log-Exporter format vs flat key=value. Pick whichever yields
+  // the CP fields. Bracket format is detected by its [ ... key:"value" ] shape.
+  const kv = isBracketFormat(msg) ? bracketParse(msg) : kvParse(msg)
   // Must have extracted at least the firewall-meaningful keys, else this is
   // not a Check Point traffic/audit log and we bail (lets dispatch quarantine).
   const hasAny = kv.src || kv.dst || kv.action || kv.product || kv.originsicname
@@ -127,7 +181,7 @@ function parse(msg) {
     source = kv.orig || kv.origin
   }
 
-  const action = normAction(kv.action)
+  const action = rawAction(kv.action)
 
   return {
     device_vendor: 'checkpoint',
@@ -136,7 +190,7 @@ function parse(msg) {
     application: kv.product || null,
     message: msg,
 
-    event_action: action,                      // accept / drop / reject / block ...
+    event_action: action,                      // RAW vendor verb (Fix #8)
     event_category: kv.product ? null : 'network',
     src_ip: kv.src || kv.orig_src || null,
     dst_ip: kv.dst || kv.orig_dst || null,

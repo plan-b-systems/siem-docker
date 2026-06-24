@@ -24,6 +24,7 @@ const cisco = require('./cisco')
 const aruba = require('./aruba')
 const dns = require('./dns')
 const openwec = require('./openwec')
+const { normVendor } = require('./util')
 
 // Priority matters: highly-specific signatures first.
 //   * CEF / LEEF leading tokens (CEF:n| / LEEF:n.n|) can't be confused with
@@ -73,6 +74,14 @@ function dispatch(msg) {
       const result = p.parse(msg)
       if (result) {
         result.parser_name = p.name
+        // Fix #4 — canonicalize device_vendor centrally so the SAME vendor is
+        // always ONE value regardless of how it arrived on the wire (CEF
+        // "Check Point" / LEEF "Check Point" / kv "checkpoint" → 'checkpoint';
+        // "Palo Alto Networks" → 'paloalto'; etc.). Applied to EVERY module's
+        // output here so individual parsers don't each have to know the map.
+        if (result.device_vendor != null) {
+          result.device_vendor = normVendor(result.device_vendor)
+        }
         // Strip internal debug blobs before returning — OpenSearch would choke
         // on unbounded free-form keys from _cef_ext / _leef_ext / _json etc.
         delete result._cef_ext

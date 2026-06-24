@@ -16,6 +16,8 @@
 
 'use strict'
 
+const { normProto } = require('./util')
+
 const LEVEL_MAP = {
   emergency: 0, alert: 1, critical: 2, error: 3,
   warning: 4, notice: 5, information: 6, debug: 7,
@@ -36,13 +38,6 @@ function kvParse(msg) {
     kv[m[1]] = m[2].replace(/^"|"$/g, '')
   }
   return kv
-}
-
-function normProto(p) {
-  if (p === '6') return 'tcp'
-  if (p === '17') return 'udp'
-  if (p === '1') return 'icmp'
-  return p || null
 }
 
 function toInt(v) {

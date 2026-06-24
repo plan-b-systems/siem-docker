@@ -21,6 +21,7 @@ const { dispatch } = require('../parsers')
 const fortigate = require('../parsers/fortigate')
 const generic = require('../parsers/generic')
 const checkpoint = require('../parsers/checkpoint')
+const { normProto, normVendor } = require('../parsers/util')
 
 // Convenience: run the extended dispatch and assert it produced a parse.
 function parsed(line) {
@@ -40,7 +41,10 @@ test('Check Point CEF (Log Exporter CEF mode) → normalized fields', () => {
   const r = parsed(line)
   assert.equal(r.family, 'cef')
   const p = r.parsed
-  assert.equal(p.device_vendor, 'check point')
+  // Fix #4 — device_vendor is canonicalized centrally in dispatch(): the CEF
+  // header "Check Point" collapses to the canonical 'checkpoint' token (same
+  // value the kv / LEEF Check Point logs produce).
+  assert.equal(p.device_vendor, 'checkpoint')
   assert.equal(p.src_ip, '192.0.2.10')
   assert.equal(p.dst_ip, '198.51.100.5')
   assert.equal(p.src_port, 51514)
@@ -324,4 +328,187 @@ test('dispatch stamps parser_name and strips debug blobs', () => {
   assert.equal(p.parser_name, 'cef')
   assert.equal(p._cef_ext, undefined)
   assert.equal(p._json, undefined)
+})
+
+// ════════════════════════ REGRESSION TESTS (adversarial validation) ════════
+// Added with the firewall-parser bug fixes. Each guards a specific defect found
+// by adversarial validation.
+
+// Fix #1 — CEF extension values that contain SPACES must survive (act + msg),
+// and src_user must come from suser (not be empty / not be the dest user).
+test('CEF: act/msg values with spaces survive into event_action + message + src_user', () => {
+  const line =
+    'CEF:0|Imperva|SecureSphere|12.3|100|Threat|7|' +
+    "src=10.0.0.5 dst=10.0.0.10 spt=54321 dpt=80 act=Brute Force Detected " +
+    "suser=admin msg=Connection permitted by rule 7"
+  const p = parsed(line).parsed
+  assert.equal(p.event_action, 'Brute Force Detected') // full multi-word verb
+  assert.equal(p.src_user, 'admin')
+  // trailing msg= (with spaces) survives into the composed message
+  assert.match(p.message, /Connection permitted by rule 7$/)
+  // earlier fields are still parsed correctly (value-with-spaces didn't swallow them)
+  assert.equal(p.src_ip, '10.0.0.5')
+  assert.equal(p.dst_ip, '10.0.0.10')
+  assert.equal(p.src_port, 54321)
+  assert.equal(p.dst_port, 80)
+})
+
+// Fix #2 — CEF proto given as a numeric IANA value AND uppercase name → 'tcp'.
+test('CEF: numeric proto (6) normalizes to tcp', () => {
+  const line = 'CEF:0|Imperva|SecureSphere|12.3|1|Test|5|src=1.2.3.4 dst=5.6.7.8 proto=6 act=allow'
+  assert.equal(parsed(line).parsed.network_protocol, 'tcp')
+})
+test('CEF: uppercase proto name (TCP) normalizes to tcp', () => {
+  const line = 'CEF:0|Imperva|SecureSphere|12.3|1|Test|5|src=1.2.3.4 dst=5.6.7.8 proto=TCP act=allow'
+  assert.equal(parsed(line).parsed.network_protocol, 'tcp')
+})
+
+// Fix #5 — duser maps to dst_user, NOT src_user.
+test('CEF: duser-only maps to dst_user and leaves src_user null', () => {
+  const line = 'CEF:0|Imperva|SecureSphere|12.3|1|Test|5|src=1.2.3.4 dst=5.6.7.8 duser=victim act=blocked'
+  const p = parsed(line).parsed
+  assert.equal(p.dst_user, 'victim')
+  assert.equal(p.src_user, null) // dest user must NEVER be folded into src_user
+})
+
+// Fix #4 — device_vendor is identical across Check Point CEF / LEEF / kv.
+test('device_vendor is canonical and identical across Check Point CEF/LEEF/kv', () => {
+  const cefLine =
+    'CEF:0|Check Point|VPN-1 & FireWall-1|R81.20|Drop|Firewall|7|src=1.1.1.1 dst=2.2.2.2 act=Drop'
+  const leefLine =
+    'LEEF:1.0|Check Point|VPN-1|R81|Drop|src=1.1.1.1\tdst=2.2.2.2\taction=Drop'
+  const kvLine =
+    'CheckPoint: loc=1 product="VPN-1 & FireWall-1" action=drop src=1.1.1.1 dst=2.2.2.2 ' +
+    'originsicname="CN=gw,O=mgmt"'
+  const a = parsed(cefLine).parsed.device_vendor
+  const b = parsed(leefLine).parsed.device_vendor
+  const c = parsed(kvLine).parsed.device_vendor
+  assert.equal(a, 'checkpoint')
+  assert.equal(b, 'checkpoint')
+  assert.equal(c, 'checkpoint')
+  assert.equal(a, b)
+  assert.equal(b, c)
+})
+
+// Fix #3 — a PAN-OS 10.1+/11.x line whose session block is SHIFTED right by
+// extra DG-hierarchy/UUID columns must still extract the right ports/proto/
+// action via the schema guard — NOT garbage.
+test('Palo Alto shifted (longer) schema → guard re-aligns, no garbage', () => {
+  // Build a canonical TRAFFIC record, then INSERT 5 extra columns just before
+  // the session block (simulating DG-hierarchy + UUID inserts in 10.1+/11.x).
+  const f = new Array(47).fill('')
+  f[0] = '1'; f[1] = '2024/06/20 11:22:33'; f[2] = '001801000000'; f[3] = 'TRAFFIC'; f[4] = 'end'
+  f[6] = '2024/06/20 11:22:30'
+  f[7] = '192.168.10.20'; f[8] = '203.0.113.5'
+  f[11] = 'Allow-Web'; f[14] = 'ssl'
+  f[24] = '52000'; f[25] = '443'; f[29] = 'tcp'; f[30] = 'allow'
+  f[32] = '4096'; f[33] = '8192'; f[42] = 'Israel'; f[43] = 'United States'
+  // Shift the session block right by 5 columns (everything from idx 24 onward).
+  const SHIFT = 5
+  const shifted = f.slice(0, 24).concat(new Array(SHIFT).fill('SHIM'), f.slice(24))
+  const line = '<14>' + shifted.join(',')
+  const r = parsed(line)
+  assert.equal(r.family, 'palo')
+  const p = r.parsed
+  assert.equal(p.event_action, 'allow')
+  assert.equal(p.src_port, 52000)
+  assert.equal(p.dst_port, 443)
+  assert.equal(p.network_protocol, 'tcp')
+  assert.equal(p.src_ip, '192.168.10.20') // header fields unaffected by the shift
+  assert.equal(p.dst_ip, '203.0.113.5')
+})
+
+// Fix #3 — a genuinely garbled session block (bogus action, non-numeric ports)
+// must NOT emit bogus src_port/dst_port/proto/action — the guard fires and the
+// dispatcher quarantines (stores raw) instead.
+test('Palo Alto garbled session fields → guard fires, no bogus parse', () => {
+  const f = new Array(47).fill('')
+  f[0] = '1'; f[1] = '2024/06/20 11:22:33'; f[2] = '001801000000'; f[3] = 'TRAFFIC'; f[4] = 'end'
+  f[6] = '2024/06/20 11:22:30'
+  f[7] = '192.168.10.20'; f[8] = '203.0.113.5'
+  // No valid action token anywhere, ports are non-numeric junk.
+  f[24] = '0x0'; f[25] = 'NaN'; f[29] = 'junk'; f[30] = 'frobnicate'
+  const line = '<14>' + f.join(',')
+  const r = dispatch(line)
+  // palo.detect() claims it (TRAFFIC anchor) but parse() returns null → quarantine.
+  assert.ok(r === null || r.kind === 'quarantine', `got ${JSON.stringify(r)}`)
+  if (r && r.kind === 'parsed') {
+    // Defensive: if it ever parses, it must not carry the garbage values.
+    assert.notEqual(r.parsed.src_port, 0)
+    assert.notEqual(r.parsed.event_action, 'frobnicate')
+  }
+})
+
+// Fix #2 / #7 — Cisco ASA 106023 "Deny tcp ..." → network_protocol=tcp.
+test('Cisco ASA 106023 extracts protocol from body → network_protocol=tcp', () => {
+  const line =
+    '<166>%ASA-4-106023: Deny tcp src outside:203.0.113.7/44321 ' +
+    'dst inside:192.168.1.10/3389 by access-group "outside_access_in"'
+  const p = parsed(line).parsed
+  assert.equal(p.network_protocol, 'tcp')
+  assert.equal(p.event_action, 'deny')
+})
+
+// Fix #7 — generic fallback maps reset-both to an action (deny-family).
+test('Generic fallback: reset-both maps to an action', () => {
+  const line = 'fw1 reset-both connection 10.0.0.1 to 10.0.0.2 tcp dport=443'
+  const p = generic.parse(line)
+  assert.ok(p, 'generic should parse the reset-both line')
+  assert.equal(p.event_action, 'deny') // reset* is a connection-termination (deny) outcome
+})
+
+// Fix #6 — Check Point Log-Exporter BRACKET/COLON format is parsed.
+test('Check Point bracket/colon Log-Exporter format → normalized fields', () => {
+  const line =
+    '<134>1 2024-06-20T11:22:33Z gw-fw - - - ' +
+    '[action:"Drop"; src:"1.2.3.4"; dst:"5.6.7.8"; proto:"6"; s_port:"40000"; ' +
+    'service:"443"; rule:"7"; rule_name:"Block Inbound"]'
+  const r = parsed(line)
+  assert.equal(r.family, 'checkpoint')
+  const p = r.parsed
+  assert.equal(p.device_vendor, 'checkpoint')
+  assert.equal(p.event_action, 'Drop')
+  assert.equal(p.src_ip, '1.2.3.4')
+  assert.equal(p.dst_ip, '5.6.7.8')
+  assert.equal(p.src_port, 40000)
+  assert.equal(p.dst_port, 443) // numeric service → dst_port
+  assert.equal(p.network_protocol, 'tcp') // proto "6" normalized
+  assert.equal(p.fw_policy_id, '7')
+  assert.equal(p.fw_rule_name, 'Block Inbound')
+})
+
+// Fix #6 — broadened detect() claims a marker-stripped CP key=value line but
+// STILL refuses a FortiGate line (disambiguation must stay intact).
+test('Check Point detect() claims marker-stripped CP kv, rejects FortiGate', () => {
+  const cpStripped =
+    'action=Drop src=10.0.0.1 dst=10.0.0.2 proto=tcp service=443 s_port=40000 rule=7'
+  assert.equal(checkpoint.detect(cpStripped), true)
+  // FortiGate markers (devname=/logid=/srcport=/policyid=) must still be rejected.
+  const forti =
+    'date=2024-06-20 time=11:22:33 devname="FGT" logid="0001" type="traffic" ' +
+    'srcip=1.2.3.4 srcport=5000 dstip=5.6.7.8 action=deny policyid=7'
+  assert.equal(checkpoint.detect(forti), false)
+})
+
+// Fix #2 — direct unit coverage of the shared normProto helper.
+test('util.normProto: numbers + names normalize consistently', () => {
+  assert.equal(normProto('6'), 'tcp')
+  assert.equal(normProto('17'), 'udp')
+  assert.equal(normProto('1'), 'icmp')
+  assert.equal(normProto('47'), 'gre')
+  assert.equal(normProto('50'), 'esp')
+  assert.equal(normProto('TCP'), 'tcp')
+  assert.equal(normProto('Udp'), 'udp')
+  assert.equal(normProto(''), null)
+  assert.equal(normProto(null), null)
+})
+
+// Fix #4 — direct unit coverage of the shared normVendor helper.
+test('util.normVendor: aliases collapse to one canonical token', () => {
+  assert.equal(normVendor('Check Point'), 'checkpoint')
+  assert.equal(normVendor('checkpoint'), 'checkpoint')
+  assert.equal(normVendor('CheckPoint'), 'checkpoint')
+  assert.equal(normVendor('Palo Alto Networks'), 'paloalto')
+  assert.equal(normVendor('Fortinet'), 'fortinet')
+  assert.equal(normVendor('Cisco'), 'cisco')
 })

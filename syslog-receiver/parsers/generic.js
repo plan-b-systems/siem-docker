@@ -21,8 +21,13 @@ const IPV4 = /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d
 
 // Action keywords seen across firewall vendors. First match wins; we normalize
 // synonyms to a small canonical set so downstream rules can match one value.
+// NOTE: reset variants are matched BEFORE the broad deny pattern so a
+// "reset-both" line resolves to 'deny' via the explicit reset rule (and is not
+// missed). reset / reset-both / reset-client / reset-server are connection
+// terminations (deny-family outcome) emitted by PAN-OS and others (Fix #7).
 const ACTION_PATTERNS = [
   { re: /\b(accept(?:ed)?|allow(?:ed)?|permit(?:ted)?|pass(?:ed)?)\b/i, action: 'allow' },
+  { re: /\breset(?:-(?:both|client|server))?\b/i, action: 'deny' },
   { re: /\b(den(?:y|ied)|block(?:ed)?|drop(?:ped)?|reject(?:ed)?|discard(?:ed)?)\b/i, action: 'deny' },
   { re: /\b(close[d]?|teardown|disconnect(?:ed)?)\b/i, action: 'close' },
   { re: /\b(timeout|timed[-\s]?out)\b/i, action: 'timeout' },

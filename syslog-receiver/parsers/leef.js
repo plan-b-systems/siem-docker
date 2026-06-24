@@ -11,8 +11,18 @@
 // LEEF 1.0 and the 6th field is already the extension.
 //
 // Common ECS-ish keys: src, dst, srcPort, dstPort, usrName, action, cat, proto.
+//
+// EVENT_ACTION POLICY (Fix #8): event_action carries the RAW vendor verb
+// (ext.action), exactly like the cloud receiver and cef.js. No canonicalization.
+//
+// Multi-word values: LEEF is delimiter-based (tab / ^ / explicit 2.0 delim), so
+// a value like usrName="Jane Doe" or action="Brute Force" survives the split
+// intact (we only split on the configured delimiter, never on spaces unless the
+// delimiter IS a space — in which case quoted runs are matched as a unit).
 
 'use strict'
+
+const { normProto } = require('./util')
 
 function detect(msg) {
   return /(?:^|\s)LEEF:\d+\.\d+\|/.test(msg)
@@ -93,9 +103,9 @@ function parse(msg) {
     src_port: ext.srcPort ? parseInt(ext.srcPort, 10) : null,
     dst_port: ext.dstPort ? parseInt(ext.dstPort, 10) : null,
     src_user: ext.usrName || ext.srcUserName || null,
-    event_action: ext.action || null,
+    event_action: ext.action || null, // RAW vendor verb (Fix #8)
     event_category: ext.cat || ext.category || null,
-    network_protocol: ext.proto || null,
+    network_protocol: normProto(ext.proto),
     bytes_sent: ext.dstBytes ? parseInt(ext.dstBytes, 10) : null,
     bytes_received: ext.srcBytes ? parseInt(ext.srcBytes, 10) : null,
 

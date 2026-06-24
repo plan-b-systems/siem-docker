@@ -2,6 +2,18 @@ const dgram = require('node:dgram');
 const net = require('node:net');
 const fs = require('node:fs');
 const { Client } = require('@opensearch-project/opensearch');
+// Pluggable multivendor parser stack (CEF, LEEF, JSON, Check Point kv, Palo
+// Alto CSV, Cisco, Aruba, OpenWEC, DNS). Pure functions, no OpenSearch import.
+const { dispatch: dispatchExtended } = require('./parsers');
+// FortiGate kv parser — pure module, called as the post-dispatch FortiGate
+// step (mirrors the cloud receiver's inline FortiGate layering) but kept in one
+// unit-testable place.
+const fortigateParser = require('./parsers/fortigate');
+// Generic heuristic firewall fallback — last-resort src/dst/port/action
+// extractor for vendors we have no dedicated parser for. Run explicitly here
+// (NOT in the dispatch list) so it sits AFTER FortiGate kv + RFC parsers,
+// mirroring the cloud receiver's layering.
+const genericParser = require('./parsers/generic');
 
 // ── Config ──────────────────────────────────────────────
 const SYSLOG_UDP_PORT = 514;
@@ -33,6 +45,33 @@ function parseSyslog(raw) {
   const msg = raw.toString('utf-8').trim();
   const receiveTime = new Date().toISOString();
   const result = { raw: msg, timestamp: receiveTime, syslog_timestamp: null };
+
+  // Pull PRI up-front so facility/severity are available regardless of which
+  // parser fires (extended parsers may not see the leading <PRI> header).
+  const priMatchEarly = msg.match(/^<(\d{1,3})>/);
+  if (priMatchEarly) {
+    const pri = parseInt(priMatchEarly[1]);
+    result.facility = Math.floor(pri / 8);
+    result.severity = pri % 8;
+  }
+
+  // Try extended parsers first (CEF, LEEF, JSON, Check Point kv, Palo Alto CSV,
+  // Cisco, Aruba, OpenWEC, DNS). dispatch() returns one of:
+  //   {kind:'parsed', parsed, family}     — successful parse
+  //   {kind:'quarantine', family, reason} — parser claimed but failed strictly
+  //   null                                — no parser claimed; fall through
+  // On-prem is single-tenant with no quarantine index/API, so a claimed-but-
+  // failed parse falls through to the raw store with a debug log.
+  const extended = dispatchExtended(msg);
+  if (extended && extended.kind === 'parsed') {
+    // ingest_source defaults to 'syslog' for the firewall families; the Windows
+    // (openwec) parser sets its own 'wef'/'sysmon' value which we must not clobber.
+    if (!extended.parsed.ingest_source) extended.parsed.ingest_source = 'syslog';
+    return Object.assign(result, extended.parsed);
+  }
+  if (extended && extended.kind === 'quarantine') {
+    console.debug(`[parser] ${extended.family} claimed but failed (${extended.reason}); storing raw`);
+  }
 
   // Try RFC 5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG
   const rfc5424 = msg.match(/^<(\d{1,3})>(\d)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s*(.*)/s);
@@ -74,37 +113,36 @@ function parseSyslog(raw) {
     return result;
   }
 
-  // Try FortiGate key=value format
-  const fortiMatch = msg.match(/(?:date=|devname=|logid=|type=)/);
-  if (fortiMatch) {
-    const kv = {};
-    const kvRegex = /(\w+)=("(?:[^"\\]|\\.)*"|[^\s"]+)/g;
-    let m;
-    while ((m = kvRegex.exec(msg)) !== null) {
-      kv[m[1]] = m[2].replace(/^"|"$/g, '');
+  // Try FortiGate key=value format: date=... time=... devname=... logid=... type=... ...
+  // FULL field mapping (src_ip/dst_ip/event_action/ports/protocol/policy/...) via
+  // the pure fortigate parser module — not just source/app/severity.
+  if (fortigateParser.detect(msg)) {
+    const forti = fortigateParser.parse(msg);
+    forti.parser_name = 'fortigate-kv';
+    // The module sets severity from kv.level when present; keep the leading
+    // <PRI>-derived severity (set up-front above) only when the module didn't.
+    if (forti.severity === undefined && result.severity !== undefined) {
+      forti.severity = result.severity;
     }
+    return Object.assign(result, forti);
+  }
 
-    result.source = kv.devname || kv.srcname || 'fortigate';
-    result.application = kv.type || kv.subtype || null;
-    result.message = msg;
-
-    const levelMap = { emergency: 0, alert: 1, critical: 2, error: 3, warning: 4, notice: 5, information: 6, debug: 7 };
-    if (kv.level && levelMap[kv.level] !== undefined) {
-      result.severity = levelMap[kv.level];
+  // Generic heuristic firewall fallback — for any vendor we have no dedicated
+  // parser for, still regex-extract src/dst IPs, ports, protocol, and an action
+  // keyword so unknown firewalls yield the common normalized fields. Runs AFTER
+  // FortiGate kv + RFC parsers. Conservative detect() avoids hijacking plain
+  // application syslog (sshd/cron/etc), which the RFC path above already handled.
+  if (genericParser.detect(msg)) {
+    try {
+      const g = genericParser.parse(msg);
+      if (g) {
+        g.parser_name = 'generic-firewall';
+        g.ingest_source = 'syslog';
+        return Object.assign(result, g);
+      }
+    } catch (err) {
+      console.debug(`[parser:generic] error: ${err.message}`);
     }
-
-    if (kv.date && kv.time) {
-      result.syslog_timestamp = `${kv.date} ${kv.time}`;
-    }
-
-    const priMatch = msg.match(/^<(\d{1,3})>/);
-    if (priMatch) {
-      const pri = parseInt(priMatch[1]);
-      result.facility = Math.floor(pri / 8);
-      if (result.severity === undefined) result.severity = pri % 8;
-    }
-
-    return result;
   }
 
   // Fallback: unparseable — store raw message as-is
@@ -122,7 +160,7 @@ async function indexLog(parsed, sourceIP) {
     '@timestamp': parsed.timestamp,
     client_id: CLIENT_ID,
     client_name: CLIENT_NAME,
-    source_ip: sourceIP,
+    source_ip: sourceIP,              // transport IP (who sent the syslog)
     source: parsed.source,
     application: parsed.application || null,
     pid: parsed.pid || null,
@@ -132,6 +170,94 @@ async function indexLog(parsed, sourceIP) {
     severity_code: parsed.severity,
     message: parsed.message,
     raw: parsed.raw,
+    // ── Normalized fields (identical names to the cloud receiver so the
+    // dashboard + MDR engine work unchanged) ──
+    device_vendor: parsed.device_vendor || null,
+    device_product: parsed.device_product || null,
+    parser_name: parsed.parser_name || null,
+    ingest_source: parsed.ingest_source || null,
+    event_action: parsed.event_action || null,
+    event_category: parsed.event_category || null,
+    event_subtype: parsed.event_subtype || null,
+    src_ip: parsed.src_ip || null,
+    dst_ip: parsed.dst_ip || null,
+    src_port: parsed.src_port ?? null,
+    dst_port: parsed.dst_port ?? null,
+    src_user: parsed.src_user || null,
+    src_domain: parsed.src_domain || null,
+    src_country: parsed.src_country || null,
+    dst_country: parsed.dst_country || null,
+    src_mac: parsed.src_mac || null,
+    network_protocol: parsed.network_protocol || null,
+    network_service: parsed.network_service || null,
+    fw_policy_id: parsed.fw_policy_id || null,
+    fw_rule_name: parsed.fw_rule_name || null,
+    fw_risk_score: parsed.fw_risk_score ?? null,
+    fw_risk_level: parsed.fw_risk_level || null,
+    bytes_sent: parsed.bytes_sent ?? null,
+    bytes_received: parsed.bytes_received ?? null,
+    src_interface: parsed.src_interface || null,
+    dst_interface: parsed.dst_interface || null,
+    session_id: parsed.session_id || null,
+    // ── CEF ──
+    cef_version: parsed.cef_version ?? null,
+    cef_signature_id: parsed.cef_signature_id || null,
+    cef_name: parsed.cef_name || null,
+    cef_severity: parsed.cef_severity ?? null,
+    device_version: parsed.device_version || null,
+    // ── LEEF ──
+    leef_version: parsed.leef_version ?? null,
+    leef_event_id: parsed.leef_event_id || null,
+    leef_severity: parsed.leef_severity ?? null,
+    // ── Check Point ──
+    cp_sic_name: parsed.cp_sic_name || null,
+    cp_blade: parsed.cp_blade || null,
+    cp_inzone: parsed.cp_inzone || null,
+    cp_outzone: parsed.cp_outzone || null,
+    // ── Palo Alto ──
+    pan_log_type: parsed.pan_log_type || null,
+    pan_subtype: parsed.pan_subtype || null,
+    pan_serial: parsed.pan_serial || null,
+    pan_threat_id: parsed.pan_threat_id || null,
+    pan_threat_misc: parsed.pan_threat_misc || null,
+    pan_threat_category: parsed.pan_threat_category || null,
+    pan_direction: parsed.pan_direction || null,
+    pan_url: parsed.pan_url || null,
+    pan_url_category: parsed.pan_url_category || null,
+    pan_event_id: parsed.pan_event_id || null,
+    pan_auth_type: parsed.pan_auth_type || null,
+    pan_auth_event_type: parsed.pan_auth_event_type || null,
+    pan_userid_factor: parsed.pan_userid_factor || null,
+    pan_userid_event: parsed.pan_userid_event || null,
+    pan_module: parsed.pan_module || null,
+    pan_object: parsed.pan_object || null,
+    // ── Cisco ──
+    cisco_facility: parsed.cisco_facility || null,
+    cisco_mnemonic: parsed.cisco_mnemonic || null,
+    // ── Aruba ──
+    aruba_symbol_id: parsed.aruba_symbol_id || null,
+    aruba_module: parsed.aruba_module || null,
+    aruba_ssid: parsed.aruba_ssid || null,
+    aruba_bssid: parsed.aruba_bssid || null,
+    // ── DNS ──
+    dns_qname: parsed.dns_qname || null,
+    dns_qtype: parsed.dns_qtype || null,
+    dns_client_ip: parsed.dns_client_ip || null,
+    dns_response_code: parsed.dns_response_code || null,
+    // ── Windows (OpenWEC) — emitted when a Windows event is forwarded ──
+    win_event_id: parsed.win_event_id ?? null,
+    win_channel: parsed.win_channel || null,
+    win_provider: parsed.win_provider || null,
+    logon_type: parsed.logon_type ?? null,
+    win_logon_type: parsed.win_logon_type ?? null,
+    win_process_name: parsed.win_process_name || null,
+    win_command_line: parsed.win_command_line || null,
+    win_parent_process_name: parsed.win_parent_process_name || null,
+    process_name: parsed.process_name || null,
+    command_line: parsed.command_line || null,
+    parent_process_name: parsed.parent_process_name || null,
+    account_name: parsed.account_name || null,
+    account_domain: parsed.account_domain || null,
   };
 
   try {
@@ -158,7 +284,7 @@ async function ensureIndexTemplate() {
             '@timestamp': { type: 'date' },
             client_id: { type: 'keyword' },
             client_name: { type: 'keyword' },
-            source_ip: { type: 'ip' },
+            source_ip: { type: 'ip', ignore_malformed: true },
             source: { type: 'keyword' },
             application: { type: 'keyword' },
             pid: { type: 'keyword' },
@@ -168,6 +294,94 @@ async function ensureIndexTemplate() {
             severity_code: { type: 'integer' },
             message: { type: 'text' },
             raw: { type: 'text', index: false },
+            // ── Normalized firewall / network fields (identical names to the
+            // cloud receiver so the dashboard + MDR engine work unchanged) ──
+            device_vendor: { type: 'keyword' },
+            device_product: { type: 'keyword' },
+            device_version: { type: 'keyword' },
+            parser_name: { type: 'keyword' },
+            ingest_source: { type: 'keyword' },
+            event_action: { type: 'keyword' },
+            event_category: { type: 'keyword' },
+            event_subtype: { type: 'keyword' },
+            src_ip: { type: 'ip', ignore_malformed: true },
+            dst_ip: { type: 'ip', ignore_malformed: true },
+            src_port: { type: 'integer' },
+            dst_port: { type: 'integer' },
+            src_user: { type: 'keyword' },
+            src_domain: { type: 'keyword' },
+            src_country: { type: 'keyword' },
+            dst_country: { type: 'keyword' },
+            src_mac: { type: 'keyword' },
+            network_protocol: { type: 'keyword' },
+            network_service: { type: 'keyword' },
+            fw_policy_id: { type: 'keyword' },
+            fw_rule_name: { type: 'keyword' },
+            fw_risk_score: { type: 'integer' },
+            fw_risk_level: { type: 'keyword' },
+            bytes_sent: { type: 'long' },
+            bytes_received: { type: 'long' },
+            src_interface: { type: 'keyword' },
+            dst_interface: { type: 'keyword' },
+            session_id: { type: 'keyword' },
+            // ── CEF ──
+            cef_version: { type: 'integer' },
+            cef_signature_id: { type: 'keyword' },
+            cef_name: { type: 'keyword' },
+            cef_severity: { type: 'integer' },
+            // ── LEEF ──
+            leef_version: { type: 'integer' },
+            leef_event_id: { type: 'keyword' },
+            leef_severity: { type: 'integer' },
+            // ── Check Point ──
+            cp_sic_name: { type: 'keyword' },
+            cp_blade: { type: 'keyword' },
+            cp_inzone: { type: 'keyword' },
+            cp_outzone: { type: 'keyword' },
+            // ── Palo Alto ──
+            pan_log_type: { type: 'keyword' },
+            pan_subtype: { type: 'keyword' },
+            pan_serial: { type: 'keyword' },
+            pan_threat_id: { type: 'keyword' },
+            pan_threat_misc: { type: 'text', fields: { keyword: { type: 'keyword', ignore_above: 2048 } } },
+            pan_threat_category: { type: 'keyword' },
+            pan_direction: { type: 'keyword' },
+            pan_url: { type: 'text', fields: { keyword: { type: 'keyword', ignore_above: 2048 } } },
+            pan_url_category: { type: 'keyword' },
+            pan_event_id: { type: 'keyword' },
+            pan_auth_type: { type: 'keyword' },
+            pan_auth_event_type: { type: 'keyword' },
+            pan_userid_factor: { type: 'keyword' },
+            pan_userid_event: { type: 'keyword' },
+            pan_module: { type: 'keyword' },
+            pan_object: { type: 'keyword' },
+            // ── Cisco ──
+            cisco_facility: { type: 'keyword' },
+            cisco_mnemonic: { type: 'keyword' },
+            // ── Aruba ──
+            aruba_symbol_id: { type: 'keyword' },
+            aruba_module: { type: 'keyword' },
+            aruba_ssid: { type: 'keyword' },
+            aruba_bssid: { type: 'keyword' },
+            // ── DNS ──
+            dns_qname: { type: 'keyword' },
+            dns_qtype: { type: 'keyword' },
+            dns_client_ip: { type: 'ip', ignore_malformed: true },
+            dns_response_code: { type: 'keyword' },
+            // ── Windows (OpenWEC) ──
+            win_event_id: { type: 'integer' },
+            win_channel: { type: 'keyword' },
+            win_provider: { type: 'keyword' },
+            logon_type: { type: 'integer' },
+            win_logon_type: { type: 'integer' },
+            win_process_name: { type: 'keyword' },
+            win_command_line: { type: 'text' },
+            win_parent_process_name: { type: 'keyword' },
+            process_name: { type: 'keyword' },
+            command_line: { type: 'text' },
+            parent_process_name: { type: 'keyword' },
+            account_name: { type: 'keyword' },
+            account_domain: { type: 'keyword' },
           },
         },
       },

@@ -259,6 +259,14 @@ async function indexLog(parsed, sourceIP) {
     parent_process_name: parsed.parent_process_name || null,
     account_name: parsed.account_name || null,
     account_domain: parsed.account_domain || null,
+    // ── Windows file-access (NXLog im_msvistalog) — EIDs 4663/4660/4670/5140/5145.
+    // src_ip/src_port/src_user/event_action/device_vendor/win_event_id/win_channel
+    // reuse the fields above; only the file/share-specific keys are new here. ──
+    file_path: parsed.file_path || null,
+    share_name: parsed.share_name || null,
+    relative_target_name: parsed.relative_target_name || null,
+    access: parsed.access || null,
+    win_handle_id: parsed.win_handle_id || null,
   };
 
   try {
@@ -384,6 +392,14 @@ async function ensureIndexTemplate() {
             parent_process_name: { type: 'keyword' },
             account_name: { type: 'keyword' },
             account_domain: { type: 'keyword' },
+            // ── Windows file-access (NXLog) — NEW fields. src_ip/src_port/
+            // src_user/event_action/device_vendor/win_event_id/win_channel are
+            // already mapped above and reused, not redefined. ──
+            file_path: { type: 'keyword' },
+            share_name: { type: 'keyword' },
+            relative_target_name: { type: 'keyword' },
+            access: { type: 'keyword' },
+            win_handle_id: { type: 'keyword' },
           },
         },
       },

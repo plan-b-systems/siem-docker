@@ -17,6 +17,7 @@
 
 const cef = require('./cef')
 const leef = require('./leef')
+const windows = require('./windows')
 const json = require('./json')
 const checkpoint = require('./checkpoint')
 const palo = require('./palo')
@@ -29,6 +30,11 @@ const { normVendor } = require('./util')
 // Priority matters: highly-specific signatures first.
 //   * CEF / LEEF leading tokens (CEF:n| / LEEF:n.n|) can't be confused with
 //     anything else — and Check Point Log Exporter CEF/LEEF output lands here.
+//   * Windows (NXLog) flattened-JSON events — a single JSON object with a
+//     NUMERIC EventID + a Windows marker (Channel/Hostname/Computer/
+//     ProviderName). MUST run BEFORE generic json.js so Windows file-access
+//     events get Windows normalization; non-Windows JSON has no numeric
+//     EventID+marker so it falls through to json.js unchanged.
 //   * JSON (leading `{`) next.
 //   * Check Point key=value ("syslog"/"Splunk" Log-Exporter) BEFORE the
 //     server's FortiGate kv step — its detect() requires Check-Point-unique
@@ -42,6 +48,7 @@ const { normVendor } = require('./util')
 const PARSERS = [
   { name: 'cef', ...cef },
   { name: 'leef', ...leef },
+  { name: 'windows-nxlog', ...windows },
   { name: 'json', ...json },
   { name: 'checkpoint', ...checkpoint },
   { name: 'palo', ...palo },

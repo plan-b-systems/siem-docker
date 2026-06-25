@@ -21,6 +21,7 @@ const { dispatch } = require('../parsers')
 const fortigate = require('../parsers/fortigate')
 const generic = require('../parsers/generic')
 const checkpoint = require('../parsers/checkpoint')
+const windows = require('../parsers/windows')
 const { normProto, normVendor } = require('../parsers/util')
 
 // Convenience: run the extended dispatch and assert it produced a parse.
@@ -511,4 +512,276 @@ test('util.normVendor: aliases collapse to one canonical token', () => {
   assert.equal(normVendor('Palo Alto Networks'), 'paloalto')
   assert.equal(normVendor('Fortinet'), 'fortinet')
   assert.equal(normVendor('Cisco'), 'cisco')
+})
+
+// ════════════════════════ WINDOWS (NXLog file-access) ══════════════════════
+// NXLog im_msvistalog ships Security-channel events as NEWLINE-DELIMITED JSON
+// over TCP 1514. to_json() FLATTENS EventData to top-level keys, so each event
+// is one flat JSON object. windows.js claims it (numeric EventID + Windows
+// marker) BEFORE json.js. EIDs 4663/4660/4670/5140/5145 map to file/share
+// normalized fields. Non-Windows JSON must fall through to json.js.
+
+// Convenience: build a flat NXLog-style event object → JSON string.
+function nx(obj) {
+  return JSON.stringify(obj)
+}
+
+// ── 4663 READ ──
+test('Windows 4663 (object access, READ) → file_read', () => {
+  const line = nx({
+    EventID: 4663,
+    Hostname: 'FS01',
+    Computer: 'FS01.corp.local',
+    Channel: 'Security',
+    ProviderName: 'Microsoft-Windows-Security-Auditing',
+    EventTime: '2026-06-24 11:22:33',
+    SubjectUserName: 'jdoe',
+    SubjectDomainName: 'CORP',
+    ObjectName: 'C:\\Share\\report.docx',
+    ObjectType: 'File',
+    // NXLog decorates the access list with newlines/tabs.
+    AccessList: '%%4416\n\t\t\t\t',
+    AccessMask: '0x1',
+  })
+  const r = parsed(line)
+  assert.equal(r.family, 'windows-nxlog')
+  const p = r.parsed
+  assert.equal(p.win_event_id, 4663)
+  assert.equal(p.file_path, 'C:\\Share\\report.docx')
+  assert.equal(p.src_user, 'CORP\\jdoe')
+  assert.equal(p.event_action, 'file_read')
+  assert.equal(p.device_vendor, 'microsoft')
+  assert.equal(p.device_product, 'windows-security')
+  assert.equal(p.event_category, 'file')
+  assert.equal(p.parser_name, 'windows-nxlog')
+  assert.equal(p.ingest_source, 'nxlog')
+  assert.equal(p.win_channel, 'Security')
+  assert.equal(p.host, 'FS01.corp.local')
+  // access list cleaned to a single-line token (no raw newlines/tabs).
+  assert.equal(p.access, '%%4416')
+})
+
+// ── 4663 WRITE ──
+test('Windows 4663 (object access, WRITE) → file_write', () => {
+  const line = nx({
+    EventID: 4663,
+    Computer: 'FS01',
+    Channel: 'Security',
+    SubjectUserName: 'alice',
+    SubjectDomainName: 'CORP',
+    ObjectName: 'C:\\Share\\budget.xlsx',
+    AccessList: '%%4417',
+    AccessMask: '0x2',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 4663)
+  assert.equal(p.event_action, 'file_write')
+  assert.equal(p.file_path, 'C:\\Share\\budget.xlsx')
+  assert.equal(p.src_user, 'CORP\\alice')
+})
+
+// ── 4663 DELETE — DELETE wins over a co-present read/write bit ──
+test('Windows 4663 (object access, DELETE) → file_delete (precedence)', () => {
+  const line = nx({
+    EventID: 4663,
+    Computer: 'FS01',
+    Channel: 'Security',
+    SubjectUserName: 'bob',
+    SubjectDomainName: 'CORP',
+    ObjectName: 'C:\\Share\\old.tmp',
+    // Both DELETE and ReadData present — delete must take precedence.
+    AccessList: '%%1537\n\t\t\t\t%%4416',
+    AccessMask: '0x10001',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.event_action, 'file_delete')
+  assert.equal(p.file_path, 'C:\\Share\\old.tmp')
+})
+
+// ── 4663 hex-mask fallback when AccessList is absent ──
+test('Windows 4663 with only hex AccessMask (0x10000=DELETE) → file_delete', () => {
+  const line = nx({
+    EventID: 4663,
+    Computer: 'FS01',
+    Channel: 'Security',
+    SubjectUserName: 'svc',
+    ObjectName: 'D:\\data\\x',
+    AccessMask: '0x10000',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.event_action, 'file_delete')
+  assert.equal(p.src_user, 'svc') // no domain → bare username
+})
+
+// ── 4660 DELETE (HandleId only, no ObjectName) ──
+test('Windows 4660 (handle-only delete) → file_delete + win_handle_id', () => {
+  const line = nx({
+    EventID: 4660,
+    Computer: 'FS01',
+    Channel: 'Security',
+    SubjectUserName: 'bob',
+    SubjectDomainName: 'CORP',
+    HandleId: '0x4f8',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 4660)
+  assert.equal(p.event_action, 'file_delete')
+  assert.equal(p.win_handle_id, '0x4f8')
+  assert.equal(p.src_user, 'CORP\\bob')
+  assert.equal(p.file_path, undefined) // no ObjectName on this 4660
+})
+
+// ── 4670 permission change ──
+test('Windows 4670 (permissions changed) → permission_change', () => {
+  const line = nx({
+    EventID: 4670,
+    Computer: 'FS01',
+    Channel: 'Security',
+    SubjectUserName: 'admin',
+    SubjectDomainName: 'CORP',
+    ObjectName: 'C:\\Share\\Finance',
+    ObjectType: 'File',
+    OldSd: 'D:(A;;FA;;;BA)',
+    NewSd: 'D:(A;;FA;;;BA)(A;;FR;;;DU)',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 4670)
+  assert.equal(p.event_action, 'permission_change')
+  assert.equal(p.file_path, 'C:\\Share\\Finance')
+  assert.equal(p.src_user, 'CORP\\admin')
+})
+
+// ── 5145 detailed file share — workstation IP + UNC path ──
+test('Windows 5145 (detailed file share) → workstation IP + UNC file_path', () => {
+  const line = nx({
+    EventID: 5145,
+    Computer: 'FS01',
+    Channel: 'Security',
+    SubjectUserName: 'carol',
+    SubjectDomainName: 'CORP',
+    ShareName: '\\\\*\\Finance$',
+    ShareLocalPath: '\\??\\D:\\Finance',
+    RelativeTargetName: 'reports\\q2.xlsx',
+    IpAddress: '10.20.30.40', // THE WORKSTATION IP
+    IpPort: '54231',
+    AccessMask: '0x2', // WriteData
+    AccessList: '%%4417',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 5145)
+  assert.equal(p.src_ip, '10.20.30.40') // workstation IP, not the server
+  assert.equal(p.src_port, 54231)
+  assert.equal(p.share_name, '\\\\*\\Finance$')
+  assert.equal(p.relative_target_name, 'reports\\q2.xlsx')
+  assert.equal(p.file_path, '\\\\*\\Finance$\\reports\\q2.xlsx')
+  assert.equal(p.src_user, 'CORP\\carol')
+  assert.equal(p.event_action, 'file_write') // derived from WriteData
+})
+
+// ── 5145 with v4-mapped IP + no derivable access → share_access ──
+test('Windows 5145 strips ::ffff: IP and defaults to share_access', () => {
+  const line = nx({
+    EventID: 5145,
+    Computer: 'FS01',
+    Channel: 'Security',
+    SubjectUserName: 'dave',
+    ShareName: '\\\\*\\IPC$',
+    RelativeTargetName: 'srvsvc',
+    IpAddress: '::ffff:192.168.5.5',
+    IpPort: '49888',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.src_ip, '192.168.5.5')
+  assert.equal(p.event_action, 'share_access')
+})
+
+// ── 5140 share connect ──
+test('Windows 5140 (share connect) → share_connect + share_name + src_ip', () => {
+  const line = nx({
+    EventID: 5140,
+    Computer: 'FS01',
+    Channel: 'Security',
+    SubjectUserName: 'erin',
+    SubjectDomainName: 'CORP',
+    ShareName: '\\\\*\\Finance$',
+    ShareLocalPath: '\\??\\D:\\Finance',
+    IpAddress: '10.20.30.41',
+    IpPort: '50122',
+    AccessMask: '0x1',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 5140)
+  assert.equal(p.event_action, 'share_connect')
+  assert.equal(p.share_name, '\\\\*\\Finance$')
+  assert.equal(p.src_ip, '10.20.30.41')
+  assert.equal(p.src_port, 50122)
+})
+
+// ── any other EID → defensive win_<EID> ──
+test('Windows unmapped EID → defensive win_<eid> action, fields kept', () => {
+  const line = nx({
+    EventID: 4624,
+    Computer: 'FS01',
+    Channel: 'Security',
+    SubjectUserName: 'frank',
+    SubjectDomainName: 'CORP',
+    IpAddress: '10.0.0.9',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 4624)
+  assert.equal(p.event_action, 'win_4624')
+  assert.equal(p.src_ip, '10.0.0.9')
+  assert.equal(p.src_user, 'CORP\\frank')
+})
+
+// ── @timestamp derived from EventTime ──
+test('Windows EventTime → @timestamp ISO', () => {
+  const line = nx({
+    EventID: 4663,
+    Computer: 'FS01',
+    Channel: 'Security',
+    EventTime: '2026-06-24 11:22:33',
+    SubjectUserName: 'g',
+    ObjectName: 'C:\\x',
+    AccessMask: '0x1',
+  })
+  const p = parsed(line).parsed
+  assert.match(p['@timestamp'], /^2026-06-24T/)
+  assert.equal(p.win_event_time, '2026-06-24 11:22:33')
+})
+
+// ── malformed / partial JSON must NOT be claimed as parsed ──
+test('Windows: malformed/partial JSON is not claimed by windows.js', () => {
+  // Truncated mid-object (e.g. a torn TCP record) — windows.detect must reject.
+  const partial = '{"EventID":4663,"Computer":"FS01","Channel":"Secur'
+  assert.equal(windows.detect(partial), false)
+  const r = dispatch(partial)
+  // No parser should confidently parse a truncated object.
+  if (r) assert.notEqual(r.kind, 'parsed')
+})
+
+// ── NON-Windows JSON must fall through to json.js, NOT windows.js ──
+test('Non-Windows JSON is NOT claimed by windows.js → falls to json.js', () => {
+  // An app log that happens to be JSON with no numeric EventID + Windows marker.
+  const line = JSON.stringify({
+    source: { ip: '10.5.5.5', port: 5555 },
+    destination: { ip: '93.184.216.34', port: 443 },
+    event: { action: 'allow' },
+    observer: { vendor: 'sophos' },
+    message: 'allowed flow',
+  })
+  assert.equal(windows.detect(line), false)
+  const r = parsed(line)
+  assert.equal(r.family, 'json') // json.js, not windows-nxlog
+  assert.equal(r.parsed.src_ip, '10.5.5.5')
+})
+
+// ── JSON with EventID but NO Windows marker must NOT be claimed (falls to json) ──
+test('JSON with numeric EventID but no Windows marker → falls to json.js', () => {
+  const line = JSON.stringify({ EventID: 1, app: 'myservice', message: 'hi' })
+  assert.equal(windows.detect(line), false)
+  const r = dispatch(line)
+  // json.js claims any leading-{ object; it must be json, not windows-nxlog.
+  assert.ok(r && r.kind === 'parsed')
+  assert.equal(r.family, 'json')
 })

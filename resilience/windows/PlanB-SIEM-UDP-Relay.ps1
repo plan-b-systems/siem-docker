@@ -37,10 +37,18 @@ $lastCheck = [DateTime]::MinValue
 $count     = 0
 
 while ($true) {
-    # Re-resolve the WSL IP every 15s (it changes when WSL restarts).
+    # Resolve the WSL IP every 15s. Read it from the portproxy table (the startup
+    # script maintains it there) — that works under the SYSTEM task context, where
+    # `wsl -d <distro> -- hostname -I` does NOT. Fall back to wsl when run as the user.
     if (([DateTime]::Now - $lastCheck).TotalSeconds -ge 15) {
-        $ip = (wsl.exe -d $distro -- hostname -I 2>$null)
-        if ($ip) { $ip = $ip.Trim().Split(' ')[0] }
+        $ip = $null
+        foreach ($l in (netsh interface portproxy show all 2>$null)) {
+            if ($l -match '^\s*\d{1,3}(\.\d{1,3}){3}\s+\d+\s+(\d{1,3}(\.\d{1,3}){3})\s+\d+') { $ip = $matches[2]; break }
+        }
+        if (-not $ip) {
+            $h = (wsl.exe -d $distro -- hostname -I 2>$null)
+            if ($h -and ($h.Trim() -match '^\d{1,3}(\.\d{1,3}){3}')) { $ip = ($h.Trim() -split '\s+')[0] }
+        }
         if ($ip -and $ip -ne $wslIP) { $wslIP = $ip; Write-Log "WSL IP -> $wslIP (forwarded $count so far)" }
         $lastCheck = [DateTime]::Now
     }

@@ -12,6 +12,15 @@ $relay = Join-Path $dir 'udp-relay.ps1'
 $url   = 'https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/udp-relay.ps1'
 
 New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+# Stop any existing relay (task + stray process holding UDP 514) for a clean swap.
+Stop-ScheduledTask -TaskName 'PlanB-SIEM-UDP-Relay' -ErrorAction SilentlyContinue | Out-Null
+try {
+    $busy = (Get-NetUDPEndpoint -LocalPort 514 -ErrorAction SilentlyContinue).OwningProcess
+    foreach ($p in $busy) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+} catch {}
+Start-Sleep -Seconds 2
+
 Invoke-RestMethod -Uri $url -OutFile $relay
 Write-Host "Downloaded relay -> $relay"
 

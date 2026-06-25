@@ -250,6 +250,7 @@ async function indexLog(parsed, sourceIP) {
     win_channel: parsed.win_channel || null,
     win_provider: parsed.win_provider || null,
     logon_type: parsed.logon_type ?? null,
+    logon_type_label: parsed.logon_type_label || null,
     win_logon_type: parsed.win_logon_type ?? null,
     win_process_name: parsed.win_process_name || null,
     win_command_line: parsed.win_command_line || null,
@@ -259,6 +260,24 @@ async function indexLog(parsed, sourceIP) {
     parent_process_name: parsed.parent_process_name || null,
     account_name: parsed.account_name || null,
     account_domain: parsed.account_domain || null,
+    // ── Windows endpoint enrichment (NXLog desktop/endpoint EIDs) ──
+    // The computer that SENT the event — windows.js produces host/hostname but
+    // they were previously not indexed (the "who sent it" fix).
+    host: parsed.host || null,
+    hostname: parsed.hostname || null,
+    target_user: parsed.target_user || null,
+    group_name: parsed.group_name || null,
+    target_server: parsed.target_server || null,
+    service_name: parsed.service_name || null,
+    service_path: parsed.service_path || null,
+    failure_reason: parsed.failure_reason || null,
+    logon_process: parsed.logon_process || null,
+    auth_package: parsed.auth_package || null,
+    win_workstation: parsed.win_workstation || null,
+    win_privilege_list: parsed.win_privilege_list || null,
+    win_process_id: parsed.win_process_id || null,
+    win_service_type: parsed.win_service_type || null,
+    win_start_type: parsed.win_start_type || null,
     // ── Windows file-access (NXLog im_msvistalog) — EIDs 4663/4660/4670/5140/5145.
     // src_ip/src_port/src_user/event_action/device_vendor/win_event_id/win_channel
     // reuse the fields above; only the file/share-specific keys are new here. ──
@@ -383,6 +402,7 @@ async function ensureIndexTemplate() {
             win_channel: { type: 'keyword' },
             win_provider: { type: 'keyword' },
             logon_type: { type: 'integer' },
+            logon_type_label: { type: 'keyword' },
             win_logon_type: { type: 'integer' },
             win_process_name: { type: 'keyword' },
             win_command_line: { type: 'text' },
@@ -392,6 +412,23 @@ async function ensureIndexTemplate() {
             parent_process_name: { type: 'keyword' },
             account_name: { type: 'keyword' },
             account_domain: { type: 'keyword' },
+            // ── Windows endpoint enrichment (NXLog desktop/endpoint EIDs) ──
+            // host/hostname index the SENDER computer (the "who sent it" fix).
+            host: { type: 'keyword' },
+            hostname: { type: 'keyword' },
+            target_user: { type: 'keyword' },
+            group_name: { type: 'keyword' },
+            target_server: { type: 'keyword' },
+            service_name: { type: 'keyword' },
+            service_path: { type: 'keyword' },
+            failure_reason: { type: 'keyword' },
+            logon_process: { type: 'keyword' },
+            auth_package: { type: 'keyword' },
+            win_workstation: { type: 'keyword' },
+            win_privilege_list: { type: 'keyword' },
+            win_process_id: { type: 'keyword' },
+            win_service_type: { type: 'keyword' },
+            win_start_type: { type: 'keyword' },
             // ── Windows file-access (NXLog) — NEW fields. src_ip/src_port/
             // src_user/event_action/device_vendor/win_event_id/win_channel are
             // already mapped above and reused, not redefined. ──

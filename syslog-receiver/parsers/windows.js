@@ -52,6 +52,30 @@ const MASK_BITS = [
   [0x4, 'AppendData'],
 ]
 
+// LogonType -> human label (Microsoft 4624/4625 LogonType values).
+const LOGON_TYPE_LABELS = {
+  2: 'interactive',
+  3: 'network',
+  4: 'batch',
+  5: 'service',
+  7: 'unlock',
+  8: 'network_cleartext',
+  9: 'new_credentials',
+  10: 'remote_interactive',
+  11: 'cached_interactive',
+}
+
+// Account-lifecycle EIDs -> normalized event_action. TargetUserName is the
+// account being acted on; SubjectUserName is the admin/actor doing it.
+const ACCOUNT_ACTIONS = {
+  4720: 'account_created',
+  4722: 'account_enabled',
+  4723: 'password_change',
+  4724: 'password_reset',
+  4725: 'account_disabled',
+  4726: 'account_deleted',
+}
+
 function detect(raw) {
   if (raw == null) return false
   const t = String(raw).trim()
@@ -107,7 +131,7 @@ function parse(raw) {
   const out = {
     device_vendor: 'microsoft',
     device_product: 'windows-security',
-    event_category: 'file',
+    event_category: classifyByEid(eid),
     parser_name: 'windows-nxlog',
     ingest_source: 'nxlog',
     win_event_id: eid,
@@ -194,6 +218,160 @@ function parse(raw) {
       out.win_access_mask = accessMask != null ? String(accessMask) : null
       break
     }
+    // ── ENDPOINT / DESKTOP enrichment (ported from openwec.js field logic) ──
+    case 4624: {
+      // Successful logon. TargetUserName is WHO logged on; SubjectUserName is the
+      // (often SYSTEM) account that requested it — so override src_user with the
+      // target. IpAddress is the source workstation IP (null when '-').
+      out.event_action = 'login'
+      const targetUser = pick(obj, 'TargetUserName')
+      const targetDomain = pick(obj, 'TargetDomainName')
+      if (targetUser != null) {
+        out.src_user = composeUser(targetUser, targetDomain)
+        if (targetDomain != null) out.src_domain = targetDomain
+      }
+      applyLogonType(out, pick(obj, 'LogonType'))
+      const ip = normIp(pick(obj, 'IpAddress'))
+      if (ip != null) out.src_ip = ip
+      const port = toInt(pick(obj, 'IpPort'))
+      if (port != null) out.src_port = port
+      const logonProcess = pick(obj, 'LogonProcessName', 'LogonProcess')
+      if (logonProcess != null) out.logon_process = String(logonProcess)
+      const authPackage = pick(obj, 'AuthenticationPackageName', 'AuthenticationPackage')
+      if (authPackage != null) out.auth_package = String(authPackage)
+      const workstation = pick(obj, 'WorkstationName')
+      if (workstation != null) out.win_workstation = String(workstation)
+      break
+    }
+    case 4625: {
+      // Failed logon. TargetUserName is the attempted account.
+      out.event_action = 'login_failed'
+      const targetUser = pick(obj, 'TargetUserName')
+      const targetDomain = pick(obj, 'TargetDomainName')
+      if (targetUser != null) {
+        out.src_user = composeUser(targetUser, targetDomain)
+        if (targetDomain != null) out.src_domain = targetDomain
+      }
+      applyLogonType(out, pick(obj, 'LogonType'))
+      const ip = normIp(pick(obj, 'IpAddress'))
+      if (ip != null) out.src_ip = ip
+      const port = toInt(pick(obj, 'IpPort'))
+      if (port != null) out.src_port = port
+      const fr = pick(obj, 'FailureReason', 'Status', 'SubStatus')
+      if (fr != null) out.failure_reason = String(fr)
+      const logonProcess = pick(obj, 'LogonProcessName', 'LogonProcess')
+      if (logonProcess != null) out.logon_process = String(logonProcess)
+      const authPackage = pick(obj, 'AuthenticationPackageName', 'AuthenticationPackage')
+      if (authPackage != null) out.auth_package = String(authPackage)
+      const workstation = pick(obj, 'WorkstationName')
+      if (workstation != null) out.win_workstation = String(workstation)
+      break
+    }
+    case 4634:
+    case 4647: {
+      // Logoff. src_user from Subject (already composed in `out`); fall back to
+      // TargetUserName when the Subject fields were absent.
+      out.event_action = 'logoff'
+      if (out.src_user == null) {
+        const targetUser = pick(obj, 'TargetUserName')
+        const targetDomain = pick(obj, 'TargetDomainName')
+        if (targetUser != null) out.src_user = composeUser(targetUser, targetDomain)
+      }
+      break
+    }
+    case 4648: {
+      // Logon using explicit credentials.
+      out.event_action = 'login_explicit'
+      const targetUser = pick(obj, 'TargetUserName')
+      const targetDomain = pick(obj, 'TargetDomainName')
+      if (targetUser != null) out.src_user = composeUser(targetUser, targetDomain)
+      const targetServer = pick(obj, 'TargetServerName')
+      if (targetServer != null) out.target_server = String(targetServer)
+      const ip = normIp(pick(obj, 'IpAddress'))
+      if (ip != null) out.src_ip = ip
+      break
+    }
+    case 4672: {
+      // Special privileges assigned to a new logon (admin-equivalent session).
+      out.event_action = 'special_privileges'
+      // src_user already = composed SubjectUserName; keep it.
+      const privs = pick(obj, 'PrivilegeList', 'Privileges')
+      if (privs != null) out.win_privilege_list = String(privs).replace(/\s+/g, ' ').trim()
+      break
+    }
+    case 4688: {
+      // A new process was created.
+      out.event_action = 'process_create'
+      out.process_name = pick(obj, 'NewProcessName') ?? null
+      const cmd = pick(obj, 'CommandLine')
+      if (cmd != null) out.command_line = String(cmd)
+      const parent = pick(obj, 'ParentProcessName')
+      if (parent != null) out.parent_process_name = String(parent)
+      // src_user already = composed SubjectUserName; keep it.
+      const procId = pick(obj, 'NewProcessId', 'ProcessId')
+      if (procId != null) out.win_process_id = String(procId)
+      break
+    }
+    case 4720:
+    case 4722:
+    case 4723:
+    case 4724:
+    case 4725:
+    case 4726: {
+      // Account lifecycle: created/enabled/pwdchange/pwdreset/disabled/deleted.
+      // TargetUserName = account acted on; SubjectUserName = actor (src_user).
+      out.event_action = ACCOUNT_ACTIONS[eid]
+      const targetUser = pick(obj, 'TargetUserName')
+      const targetDomain = pick(obj, 'TargetDomainName')
+      if (targetUser != null) out.target_user = composeUser(targetUser, targetDomain)
+      break
+    }
+    case 4728:
+    case 4732:
+    case 4756: {
+      // Member added to a (global / local / universal) security group.
+      // MemberName/MemberSid = who was added; TargetUserName = the group.
+      out.event_action = 'group_member_added'
+      const member = pick(obj, 'MemberName', 'MemberSid')
+      if (member != null) out.target_user = String(member)
+      const group = pick(obj, 'TargetUserName')
+      if (group != null) out.group_name = composeUser(group, pick(obj, 'TargetDomainName'))
+      break
+    }
+    case 4740: {
+      // A user account was locked out. TargetUserName = locked account;
+      // TargetDomainName here is typically the source computer name.
+      out.event_action = 'account_lockout'
+      const targetUser = pick(obj, 'TargetUserName')
+      if (targetUser != null) out.target_user = String(targetUser)
+      const callerComputer = pick(obj, 'TargetDomainName')
+      if (callerComputer != null) out.win_workstation = String(callerComputer)
+      break
+    }
+    case 1102: {
+      // The security audit log was cleared. Actor lives under SubjectUserName but
+      // on 1102 it is carried in the UserData block which NXLog flattens to keys
+      // prefixed differently — accept several spellings.
+      out.event_action = 'audit_log_cleared'
+      if (out.src_user == null) {
+        const actor = pick(obj, 'SubjectUserName', 'UserName', 'AccountName')
+        const actorDomain = pick(obj, 'SubjectDomainName', 'DomainName')
+        if (actor != null) out.src_user = composeUser(actor, actorDomain)
+      }
+      break
+    }
+    case 7045: {
+      // A service was installed in the system (System log).
+      out.event_action = 'service_installed'
+      out.service_name = pick(obj, 'ServiceName') ?? null
+      const imagePath = pick(obj, 'ImagePath')
+      if (imagePath != null) out.service_path = String(imagePath)
+      const serviceType = pick(obj, 'ServiceType')
+      if (serviceType != null) out.win_service_type = String(serviceType)
+      const startType = pick(obj, 'StartType')
+      if (startType != null) out.win_start_type = String(startType)
+      break
+    }
     default: {
       // Defensive: any other forwarded EID still gets a stable action + the
       // common fields, and any path-ish / share-ish fields we recognize.
@@ -262,6 +440,34 @@ function composeUser(user, domain) {
   if (user == null || user === '' || user === '-') return null
   if (domain != null && domain !== '' && domain !== '-') return `${domain}\\${user}`
   return String(user)
+}
+
+// Set logon_type (integer) + logon_type_label from a raw LogonType value.
+// No-op when the value is absent or non-numeric.
+function applyLogonType(out, raw) {
+  const n = toInt(raw)
+  if (n == null) return
+  out.logon_type = n
+  if (Object.prototype.hasOwnProperty.call(LOGON_TYPE_LABELS, n)) {
+    out.logon_type_label = LOGON_TYPE_LABELS[n]
+  }
+}
+
+// EID -> event_category (mirrors openwec.js classifyByEid for the EIDs this
+// NXLog source forwards). The file-access EIDs stay 'file' as before.
+function classifyByEid(eid) {
+  if ([4663, 4660, 4670, 5140, 5145].includes(eid)) return 'file'
+  if ([4624, 4625, 4634, 4647, 4648].includes(eid)) return 'auth'
+  if (eid === 4688) return 'process'
+  if (
+    [4720, 4722, 4723, 4724, 4725, 4726, 4728, 4732, 4740, 4756].includes(eid)
+  ) {
+    return 'identity'
+  }
+  if (eid === 4672) return 'privilege'
+  if (eid === 1102) return 'tampering'
+  if (eid === 7045) return 'service'
+  return 'windows'
 }
 
 // Collapse NXLog's whitespace-decorated access list (e.g. "%%4416\n\t\t\t\t")

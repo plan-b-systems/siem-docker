@@ -718,9 +718,11 @@ test('Windows 5140 (share connect) → share_connect + share_name + src_ip', () 
 })
 
 // ── any other EID → defensive win_<EID> ──
+// 4799 (security-enabled local group membership enumerated) is intentionally NOT
+// one of the enriched EIDs, so it must still fall to the defensive default.
 test('Windows unmapped EID → defensive win_<eid> action, fields kept', () => {
   const line = nx({
-    EventID: 4624,
+    EventID: 4799,
     Computer: 'FS01',
     Channel: 'Security',
     SubjectUserName: 'frank',
@@ -728,8 +730,8 @@ test('Windows unmapped EID → defensive win_<eid> action, fields kept', () => {
     IpAddress: '10.0.0.9',
   })
   const p = parsed(line).parsed
-  assert.equal(p.win_event_id, 4624)
-  assert.equal(p.event_action, 'win_4624')
+  assert.equal(p.win_event_id, 4799)
+  assert.equal(p.event_action, 'win_4799')
   assert.equal(p.src_ip, '10.0.0.9')
   assert.equal(p.src_user, 'CORP\\frank')
 })
@@ -784,4 +786,312 @@ test('JSON with numeric EventID but no Windows marker → falls to json.js', () 
   // json.js claims any leading-{ object; it must be json, not windows-nxlog.
   assert.ok(r && r.kind === 'parsed')
   assert.equal(r.family, 'json')
+})
+
+// ════════════════ WINDOWS ENDPOINT / DESKTOP ENRICHMENT ════════════════════
+// Rich handling for the desktop/endpoint EIDs that previously fell to the
+// defensive 'win_<EID>' default. Ported logon/process field logic from
+// openwec.js. The sender host MUST be populated on every event.
+
+// ── 4624 successful logon: action + logon_type label + src_user from Target ──
+test('Windows 4624 (logon) → login + logon_type label + Target src_user + host', () => {
+  const line = nx({
+    EventID: 4624,
+    Hostname: 'WS-FINANCE-07',
+    Computer: 'WS-FINANCE-07.corp.local',
+    Channel: 'Security',
+    ProviderName: 'Microsoft-Windows-Security-Auditing',
+    EventTime: '2026-06-24 09:15:01',
+    SubjectUserName: 'WS-FINANCE-07$', // the machine account requesting the logon
+    SubjectDomainName: 'CORP',
+    TargetUserName: 'jdoe',
+    TargetDomainName: 'CORP',
+    LogonType: '10', // remote_interactive (RDP)
+    IpAddress: '10.20.30.40',
+    IpPort: '50514',
+    LogonProcessName: 'User32',
+    AuthenticationPackageName: 'Negotiate',
+    WorkstationName: 'WS-FINANCE-07',
+  })
+  const r = parsed(line)
+  assert.equal(r.family, 'windows-nxlog')
+  const p = r.parsed
+  assert.equal(p.win_event_id, 4624)
+  assert.equal(p.event_action, 'login')
+  assert.equal(p.event_category, 'auth')
+  // src_user comes from TargetUserName (who logged on), not the machine account.
+  assert.equal(p.src_user, 'CORP\\jdoe')
+  assert.equal(p.logon_type, 10)
+  assert.equal(p.logon_type_label, 'remote_interactive')
+  assert.equal(p.src_ip, '10.20.30.40')
+  assert.equal(p.src_port, 50514)
+  assert.equal(p.logon_process, 'User32')
+  assert.equal(p.auth_package, 'Negotiate')
+  // host = the computer that SENT it (the "who sent it" fix).
+  assert.equal(p.host, 'WS-FINANCE-07.corp.local')
+  assert.equal(p.hostname, 'WS-FINANCE-07.corp.local')
+})
+
+// ── 4624 interactive logon with IpAddress '-' → src_ip null ──
+test('Windows 4624 interactive logon (LogonType 2, IpAddress "-") → no src_ip', () => {
+  const line = nx({
+    EventID: 4624,
+    Computer: 'WS-01',
+    Channel: 'Security',
+    TargetUserName: 'localadmin',
+    TargetDomainName: 'WS-01',
+    LogonType: '2',
+    IpAddress: '-', // console logon — no network IP
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.event_action, 'login')
+  assert.equal(p.logon_type, 2)
+  assert.equal(p.logon_type_label, 'interactive')
+  assert.equal(p.src_ip, undefined) // '-' must NOT become a bogus src_ip
+  assert.equal(p.src_user, 'WS-01\\localadmin')
+})
+
+// ── 4625 failed logon: failure_reason from SubStatus ──
+test('Windows 4625 (failed logon) → login_failed + failure_reason + src_ip', () => {
+  const line = nx({
+    EventID: 4625,
+    Computer: 'WS-02.corp.local',
+    Hostname: 'WS-02',
+    Channel: 'Security',
+    TargetUserName: 'administrator',
+    TargetDomainName: 'CORP',
+    LogonType: '3',
+    IpAddress: '203.0.113.66',
+    IpPort: '44512',
+    Status: '0xC000006D',
+    SubStatus: '0xC000006A', // bad password
+    LogonProcessName: 'NtLmSsp',
+    AuthenticationPackageName: 'NTLM',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 4625)
+  assert.equal(p.event_action, 'login_failed')
+  assert.equal(p.event_category, 'auth')
+  assert.equal(p.src_user, 'CORP\\administrator')
+  assert.equal(p.src_ip, '203.0.113.66')
+  assert.equal(p.src_port, 44512)
+  assert.equal(p.failure_reason, '0xC000006D') // FailureReason absent → Status
+  assert.equal(p.logon_process, 'NtLmSsp')
+  assert.equal(p.auth_package, 'NTLM')
+  assert.equal(p.host, 'WS-02.corp.local')
+})
+
+// ── 4634 logoff ──
+test('Windows 4634 (logoff) → logoff + src_user', () => {
+  const line = nx({
+    EventID: 4634,
+    Computer: 'WS-03',
+    Channel: 'Security',
+    TargetUserName: 'jdoe',
+    TargetDomainName: 'CORP',
+    LogonType: '2',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.event_action, 'logoff')
+  assert.equal(p.src_user, 'CORP\\jdoe')
+})
+
+// ── 4648 explicit-credential logon ──
+test('Windows 4648 (explicit creds) → login_explicit + target_server', () => {
+  const line = nx({
+    EventID: 4648,
+    Computer: 'WS-04',
+    Channel: 'Security',
+    SubjectUserName: 'jdoe',
+    SubjectDomainName: 'CORP',
+    TargetUserName: 'svc_backup',
+    TargetDomainName: 'CORP',
+    TargetServerName: 'SQL01',
+    IpAddress: '10.0.0.50',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.event_action, 'login_explicit')
+  assert.equal(p.src_user, 'CORP\\svc_backup') // TargetUserName
+  assert.equal(p.target_server, 'SQL01')
+  assert.equal(p.src_ip, '10.0.0.50')
+})
+
+// ── 4672 special privileges ──
+test('Windows 4672 (special privileges) → special_privileges + src_user', () => {
+  const line = nx({
+    EventID: 4672,
+    Computer: 'DC01.corp.local',
+    Channel: 'Security',
+    SubjectUserName: 'administrator',
+    SubjectDomainName: 'CORP',
+    PrivilegeList: 'SeSecurityPrivilege\n\t\t\tSeBackupPrivilege',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 4672)
+  assert.equal(p.event_action, 'special_privileges')
+  assert.equal(p.event_category, 'privilege')
+  assert.equal(p.src_user, 'CORP\\administrator')
+  assert.equal(p.win_privilege_list, 'SeSecurityPrivilege SeBackupPrivilege')
+  assert.equal(p.host, 'DC01.corp.local')
+})
+
+// ── 4688 process create: process_name + command_line + parent ──
+test('Windows 4688 (process create) → process_create + process/command/parent', () => {
+  const line = nx({
+    EventID: 4688,
+    Computer: 'WS-05.corp.local',
+    Hostname: 'WS-05',
+    Channel: 'Security',
+    SubjectUserName: 'jdoe',
+    SubjectDomainName: 'CORP',
+    NewProcessName: 'C:\\Windows\\System32\\cmd.exe',
+    CommandLine: 'cmd.exe /c whoami',
+    ParentProcessName: 'C:\\Windows\\explorer.exe',
+    NewProcessId: '0x1a2c',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 4688)
+  assert.equal(p.event_action, 'process_create')
+  assert.equal(p.event_category, 'process')
+  assert.equal(p.process_name, 'C:\\Windows\\System32\\cmd.exe')
+  assert.equal(p.command_line, 'cmd.exe /c whoami')
+  assert.equal(p.parent_process_name, 'C:\\Windows\\explorer.exe')
+  assert.equal(p.src_user, 'CORP\\jdoe')
+  assert.equal(p.win_process_id, '0x1a2c')
+  assert.equal(p.host, 'WS-05.corp.local')
+})
+
+// ── 4720 account created: target_user vs src_user (actor) ──
+test('Windows 4720 (account created) → account_created + target_user + actor', () => {
+  const line = nx({
+    EventID: 4720,
+    Computer: 'DC01.corp.local',
+    Channel: 'Security',
+    SubjectUserName: 'administrator', // the admin who created it
+    SubjectDomainName: 'CORP',
+    TargetUserName: 'newhire01', // the account created
+    TargetDomainName: 'CORP',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 4720)
+  assert.equal(p.event_action, 'account_created')
+  assert.equal(p.event_category, 'identity')
+  assert.equal(p.target_user, 'CORP\\newhire01')
+  assert.equal(p.src_user, 'CORP\\administrator') // SubjectUserName = actor
+  assert.equal(p.host, 'DC01.corp.local')
+})
+
+// ── 4724 password reset (account-lifecycle family) ──
+test('Windows 4724 (password reset) → password_reset', () => {
+  const line = nx({
+    EventID: 4724,
+    Computer: 'DC01',
+    Channel: 'Security',
+    SubjectUserName: 'helpdesk',
+    SubjectDomainName: 'CORP',
+    TargetUserName: 'jdoe',
+    TargetDomainName: 'CORP',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.event_action, 'password_reset')
+  assert.equal(p.target_user, 'CORP\\jdoe')
+  assert.equal(p.src_user, 'CORP\\helpdesk')
+})
+
+// ── 4732 added to local group ──
+test('Windows 4732 (added to group) → group_member_added + group_name', () => {
+  const line = nx({
+    EventID: 4732,
+    Computer: 'WS-06',
+    Channel: 'Security',
+    SubjectUserName: 'administrator',
+    SubjectDomainName: 'CORP',
+    MemberSid: 'S-1-5-21-111-222-333-1104',
+    MemberName: 'CN=jdoe,CN=Users,DC=corp,DC=local',
+    TargetUserName: 'Administrators', // the group
+    TargetDomainName: 'Builtin',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.event_action, 'group_member_added')
+  assert.equal(p.event_category, 'identity')
+  assert.equal(p.target_user, 'CN=jdoe,CN=Users,DC=corp,DC=local') // MemberName
+  assert.equal(p.group_name, 'Builtin\\Administrators')
+})
+
+// ── 4740 account lockout ──
+test('Windows 4740 (lockout) → account_lockout + target_user', () => {
+  const line = nx({
+    EventID: 4740,
+    Computer: 'DC01.corp.local',
+    Channel: 'Security',
+    SubjectUserName: 'DC01$',
+    SubjectDomainName: 'CORP',
+    TargetUserName: 'jdoe',
+    TargetDomainName: 'WS-FINANCE-07', // source computer on 4740
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 4740)
+  assert.equal(p.event_action, 'account_lockout')
+  assert.equal(p.event_category, 'identity')
+  assert.equal(p.target_user, 'jdoe')
+  assert.equal(p.win_workstation, 'WS-FINANCE-07')
+  assert.equal(p.host, 'DC01.corp.local')
+})
+
+// ── 1102 audit log cleared ──
+test('Windows 1102 (audit log cleared) → audit_log_cleared + actor', () => {
+  const line = nx({
+    EventID: 1102,
+    Computer: 'DC01.corp.local',
+    Channel: 'Security',
+    SubjectUserName: 'administrator',
+    SubjectDomainName: 'CORP',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 1102)
+  assert.equal(p.event_action, 'audit_log_cleared')
+  assert.equal(p.event_category, 'tampering')
+  assert.equal(p.src_user, 'CORP\\administrator')
+})
+
+// ── 7045 service install (System log) ──
+test('Windows 7045 (service installed) → service_installed + service_name/path', () => {
+  const line = nx({
+    EventID: 7045,
+    Computer: 'WS-07.corp.local',
+    Hostname: 'WS-07',
+    Channel: 'System',
+    ProviderName: 'Service Control Manager',
+    ServiceName: 'EvilSvc',
+    ImagePath: 'C:\\Windows\\Temp\\evil.exe',
+    ServiceType: 'user mode service',
+    StartType: 'auto start',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.win_event_id, 7045)
+  assert.equal(p.event_action, 'service_installed')
+  assert.equal(p.event_category, 'service')
+  assert.equal(p.service_name, 'EvilSvc')
+  assert.equal(p.service_path, 'C:\\Windows\\Temp\\evil.exe')
+  assert.equal(p.win_service_type, 'user mode service')
+  assert.equal(p.win_start_type, 'auto start')
+  assert.equal(p.win_channel, 'System')
+  assert.equal(p.host, 'WS-07.corp.local')
+})
+
+// ── host is populated on a file-access event too (regression on the "who sent it" fix) ──
+test('Windows host/hostname populated on every event (sender identity)', () => {
+  const line = nx({
+    EventID: 4663,
+    Computer: 'FS01.corp.local',
+    Hostname: 'FS01',
+    Channel: 'Security',
+    SubjectUserName: 'jdoe',
+    SubjectDomainName: 'CORP',
+    ObjectName: 'C:\\Share\\a.txt',
+    AccessMask: '0x1',
+  })
+  const p = parsed(line).parsed
+  assert.equal(p.host, 'FS01.corp.local')
+  assert.equal(p.hostname, 'FS01.corp.local')
 })

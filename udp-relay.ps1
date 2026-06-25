@@ -17,12 +17,18 @@ New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 function Write-Log($m) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [UDP-Relay] $m" | Out-File -Append -FilePath $log }
 
 Write-Log "Starting UDP relay 0.0.0.0:$port -> ${distro}:$port"
-try {
-    $udp = [System.Net.Sockets.UdpClient]::new($port)
-} catch {
-    Write-Log "FATAL: cannot bind UDP ${port}: $($_.Exception.Message)"
-    exit 1
+
+# Bind UDP 514, retrying for ~5 min if the port is briefly held (relay hand-off).
+$udp = $null
+for ($i = 1; $i -le 60; $i++) {
+    try { $udp = [System.Net.Sockets.UdpClient]::new($port); break }
+    catch {
+        Write-Log "bind attempt $i failed (port busy?), retry in 5s: $($_.Exception.Message)"
+        Start-Sleep -Seconds 5
+    }
 }
+if (-not $udp) { Write-Log "FATAL: could not bind UDP $port after retries"; exit 1 }
+Write-Log "Bound UDP $port"
 $udp.Client.ReceiveTimeout = 15000
 $fwd       = [System.Net.Sockets.UdpClient]::new()
 $any       = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)

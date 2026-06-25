@@ -139,6 +139,9 @@ function parse(raw) {
     win_provider: provider ?? null,
     host: host ?? null,
     hostname: host ?? null,
+    // Dashboard "Sources" aggregates on `source` (api/sources/route.ts terms:source).
+    // Use the machine name so every Windows host shows up as its own source.
+    source: host ?? 'Windows',
     src_user: composeUser(subjectUser, subjectDomain),
     src_domain: subjectDomain ?? null,
     message: pick(obj, 'Message') ?? null,

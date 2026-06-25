@@ -139,6 +139,8 @@ services:
       RETENTION_DAYS: "${RETENTION_DAYS:-730}"
       LICENSE_API_URL: "${LICENSE_API_URL:-https://siemsys.plan-b.systems/api/license/check}"
       AI_KEY_FILE: "/data/ai_key.json"
+      # Bootstrap/connection status written by the license-checker (read-only here).
+      PORTAL_STATUS_FILE: "/data/portal_status.json"
       AUTH_DB_PATH: "/auth-data/users.db"
       HOSTNAME: "0.0.0.0"
       NODE_ENV: "production"
@@ -202,6 +204,8 @@ services:
       LOG_FILE: "/data/license_checker.log"
       AI_KEY_FILE: "/data/ai_key.json"
       S1_INTEGRATION_FILE: "/data/s1_integration.json"
+      # Bootstrap/connection status the dashboard reads to render the alarm banner.
+      PORTAL_STATUS_FILE: "/data/portal_status.json"
       TZ: "${TIMEZONE:-Asia/Jerusalem}"
     logging:
       driver: "json-file"

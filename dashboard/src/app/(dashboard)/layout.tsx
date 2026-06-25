@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import { LanguageProvider } from '@/components/LanguageProvider'
 import AiChat from '@/components/AiChat'
+import PortalBanner from '@/components/PortalBanner'
 import { requireUser } from '@/lib/auth-require'
 import { ensureBootstrapped } from '@/lib/auth-bootstrap'
 
@@ -20,6 +21,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <div className="min-h-screen">
         <Sidebar />
         <main className="ml-60 rtl:ml-0 rtl:mr-60 min-h-screen transition-all duration-200">
+          <PortalBanner />
           {children}
         </main>
         <AiChat />

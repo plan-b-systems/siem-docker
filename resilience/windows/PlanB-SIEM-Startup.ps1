@@ -106,24 +106,6 @@ foreach ($port in @(514)) {
     }
 }
 
-# ── 5b. UDP 514 relay (netsh portproxy is TCP-only; UDP syslog senders need this) ──
-Write-Log "Ensuring UDP 514 relay..."
-$relayScript = "C:\PlanB-SIEM\udp-relay.ps1"
-if (Test-Path $relayScript) {
-    if (-not (Get-ScheduledTask -TaskName "PlanB-SIEM-UDP-Relay" -ErrorAction SilentlyContinue)) {
-        $relayAction  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$relayScript`""
-        $relayTrigger = New-ScheduledTaskTrigger -AtStartup
-        Register-ScheduledTask -TaskName "PlanB-SIEM-UDP-Relay" -Action $relayAction -Trigger $relayTrigger -RunLevel Highest -User "SYSTEM" -Force 2>&1 | Out-Null
-        Write-Log "Registered PlanB-SIEM-UDP-Relay scheduled task"
-    }
-    # (Re)start so it binds and picks up the current WSL IP.
-    Stop-ScheduledTask  -TaskName "PlanB-SIEM-UDP-Relay" -ErrorAction SilentlyContinue
-    Start-ScheduledTask -TaskName "PlanB-SIEM-UDP-Relay"
-    Write-Log "UDP relay started"
-} else {
-    Write-Log "WARN: $relayScript missing - UDP 514 (firewall syslog) will NOT be forwarded"
-}
-
 # ── 6. Final status ──
 $containers = wsl.exe -d $distro -- docker ps --format "{{.Names}}: {{.Status}}" 2>&1
 Write-Log "Container status:"

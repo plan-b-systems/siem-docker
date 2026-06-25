@@ -467,9 +467,11 @@ $psSource = "\\wsl$\$DISTRO\opt\plan-b-siem\resilience\windows"
 if (Test-Path "$psSource\PlanB-SIEM-Startup.ps1") {
     Copy-Item "$psSource\PlanB-SIEM-Startup.ps1" "$installDir\" -Force
     Copy-Item "$psSource\Register-ScheduledTask.ps1" "$installDir\" -Force
+    Copy-Item "$psSource\PlanB-SIEM-UDP-Relay.ps1" "$installDir\udp-relay.ps1" -Force
 } else {
     # Fallback: copy via wsl
     wsl.exe -d $DISTRO -u root -- bash -c "cp /opt/plan-b-siem/resilience/windows/*.ps1 /mnt/c/PlanB-SIEM/" 2>&1 | Out-Null
+    if (Test-Path "$installDir\PlanB-SIEM-UDP-Relay.ps1") { Copy-Item "$installDir\PlanB-SIEM-UDP-Relay.ps1" "$installDir\udp-relay.ps1" -Force }
 }
 
 # Register the task
@@ -498,6 +500,34 @@ Register-ScheduledTask `
     -Force | Out-Null
 
 Write-Ok "Auto-start scheduled task registered"
+
+# Register the UDP 514 relay (netsh portproxy is TCP-only, so UDP syslog
+# senders like Check Point/FortiGate never reach WSL without this).
+$relayPath = "$installDir\udp-relay.ps1"
+if (Test-Path $relayPath) {
+    $relayAction = New-ScheduledTaskAction `
+        -Execute "powershell.exe" `
+        -Argument "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$relayPath`""
+    $relaySettings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -RestartCount 999 `
+        -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -StartWhenAvailable
+    Register-ScheduledTask `
+        -TaskName "PlanB-SIEM-UDP-Relay" `
+        -Action $relayAction `
+        -Trigger (New-ScheduledTaskTrigger -AtStartup) `
+        -RunLevel Highest `
+        -User "SYSTEM" `
+        -Settings $relaySettings `
+        -Force | Out-Null
+    Start-ScheduledTask -TaskName "PlanB-SIEM-UDP-Relay"
+    Write-Ok "UDP 514 relay scheduled task registered + started"
+} else {
+    Write-Host "  WARNING: $relayPath missing - UDP 514 (firewall syslog) will NOT be forwarded" -ForegroundColor Yellow
+}
 
 # ============================================================
 # 10. Health Check

@@ -21,6 +21,7 @@ const { dispatch } = require('../parsers')
 const fortigate = require('../parsers/fortigate')
 const generic = require('../parsers/generic')
 const checkpoint = require('../parsers/checkpoint')
+const aruba = require('../parsers/aruba')
 const windows = require('../parsers/windows')
 const { normProto, normVendor } = require('../parsers/util')
 
@@ -489,6 +490,149 @@ test('Check Point detect() claims marker-stripped CP kv, rejects FortiGate', () 
     'date=2024-06-20 time=11:22:33 devname="FGT" logid="0001" type="traffic" ' +
     'srcip=1.2.3.4 srcport=5000 dstip=5.6.7.8 action=deny policyid=7'
   assert.equal(checkpoint.detect(forti), false)
+})
+
+// ════════════════ CHECK POINT SMB / QUANTUM SPARK (key="value") ═════════════
+// Check Point Small/Medium-Business gateways (Quantum Spark / 1500-series) emit
+// a NATIVE space-separated key="value" Log-Exporter shape, optionally prefixed
+// by an RFC3164 <PRI>Mon DD HH:MM:SS HOSTNAME header. These REAL production
+// lines were previously mis-claimed by aruba.js (device_vendor=aruba) or fell
+// through unparsed (device_vendor=null). They must parse as device_vendor=
+// checkpoint / device_product=quantum-spark. Samples are verbatim from a live
+// Bezeq SMB gateway.
+
+// Sample 1 — App-control accept WITH src/dst, header present, named application.
+test('Check Point SMB/Quantum Spark: app-control accept with src/dst → checkpoint', () => {
+  const line =
+    '<85>Jun 25 15:24:41 037161661 Action="accept" ' +
+    'Uuid="{0x6a3d1165,0x0,0xb1e37c00,0x14a5}" duration="0:53:56" ' +
+    'src="192.168.252.95" dst="149.154.167.91" proto="6" user="" ' +
+    'protocol="Unknown Protocol" sig_id="11" service_id="HTTPS" ' +
+    'inzone="Internal" outzone="External" rule_name="Outgoing Default Policy" ' +
+    'layer_name="Outgoing" name="Telegram" category="Instant Messaging" ' +
+    'risk="3" gateway_id="gw7F9C8BA3|Bezeq6|00:1C:7F:9C:8B:A3" ' +
+    'ProductName="Application Control" svc="443" ProductFamily=""'
+  const r = parsed(line)
+  assert.equal(r.family, 'checkpoint')
+  const p = r.parsed
+  assert.equal(p.device_vendor, 'checkpoint')
+  assert.equal(p.device_product, 'quantum-spark')
+  assert.equal(p.parser_name, 'checkpoint')
+  assert.equal(p.event_action, 'accept') // lowercased
+  assert.equal(p.event_category, 'network')
+  assert.equal(p.src_ip, '192.168.252.95')
+  assert.equal(p.dst_ip, '149.154.167.91')
+  assert.equal(p.network_protocol, 'tcp') // proto="6"
+  assert.equal(p.dst_port, 443) // svc="443"
+  assert.equal(p.network_service, 'HTTPS') // service_id
+  assert.equal(p.fw_rule_name, 'Outgoing Default Policy')
+  assert.equal(p.cp_inzone, 'Internal')
+  assert.equal(p.cp_outzone, 'External')
+  assert.equal(p.application, 'Telegram') // name
+  assert.equal(p.event_subtype, 'Instant Messaging') // category
+  assert.equal(p.src_user, null) // user="" → null (empty treated as absent)
+  // HOSTNAME from the syslog header drives source (dashboard Sources facet).
+  assert.equal(p.source, '037161661')
+  assert.equal(p.host, '037161661')
+  // gateway_id kept raw; trailing MAC extracted into a CP/device field (not src_mac).
+  assert.equal(p.cp_gateway_id, 'gw7F9C8BA3|Bezeq6|00:1C:7F:9C:8B:A3')
+  assert.equal(p.cp_gateway_mac, '00:1c:7f:9c:8b:a3')
+  assert.equal(p.src_mac, undefined) // gateway MAC must NOT be misfiled as src_mac
+  assert.equal(p.cp_blade, 'Application Control')
+})
+
+// Sample 2 — accept with NAMED app-layer protocol + svc, header present.
+test('Check Point SMB/Quantum Spark: accept with named protocol + svc → checkpoint', () => {
+  const line =
+    '<85>Jun 25 14:55:16 037161661 Action="accept" src="10.0.0.53" ' +
+    'dst="170.114.78.80" proto="6" protocol="HTTPS" service_id="HTTPS" ' +
+    'inzone="Internal" outzone="External" rule_name="Outgoing Default Policy" ' +
+    'name="Zoom" category="Web Conferencing" ' +
+    'gateway_id="gw7F9C8BA3|Bezeq6|00:1C:7F:9C:8B:A3" ' +
+    'ProductName="Application Control" svc="443" ProductFamily=""'
+  const r = parsed(line)
+  assert.equal(r.family, 'checkpoint')
+  const p = r.parsed
+  assert.equal(p.device_vendor, 'checkpoint')
+  assert.equal(p.device_product, 'quantum-spark')
+  assert.equal(p.event_action, 'accept')
+  assert.equal(p.src_ip, '10.0.0.53')
+  assert.equal(p.dst_ip, '170.114.78.80')
+  assert.equal(p.network_protocol, 'tcp')
+  assert.equal(p.dst_port, 443)
+  assert.equal(p.network_service, 'HTTPS')
+  assert.equal(p.app_protocol, 'HTTPS') // app-layer 'protocol' value kept too
+  assert.equal(p.fw_rule_name, 'Outgoing Default Policy')
+  assert.equal(p.cp_inzone, 'Internal')
+  assert.equal(p.cp_outzone, 'External')
+  assert.equal(p.application, 'Zoom')
+  assert.equal(p.event_subtype, 'Web Conferencing')
+  assert.equal(p.source, '037161661')
+})
+
+// Sample 3 — URL-filtering session-close variant: HEADER ALREADY STRIPPED, NO
+// src/dst, carries bytes/packets. Must still parse as checkpoint WITHOUT throwing.
+test('Check Point SMB/Quantum Spark: stripped-header session close (no src/dst) → checkpoint', () => {
+  const line =
+    'Action="accept" Uuid="{0x6a3d1e50,0x0,0x5fad5855,0xeae88559}" ' +
+    'start_time="25Jun2026 15:25:52" elapsed="0:00:13" packets="4" bytes="404" ' +
+    'client_inbound_interface="wlan0" ' +
+    'gateway_id="gw7F9C8BA3|Bezeq6|00:1C:7F:9C:8B:A3" ProductName="" ProductFamily=""'
+  let r
+  assert.doesNotThrow(() => { r = parsed(line) }, 'sample 3 must parse without throwing')
+  assert.equal(r.family, 'checkpoint')
+  const p = r.parsed
+  assert.equal(p.device_vendor, 'checkpoint')
+  assert.equal(p.device_product, 'quantum-spark')
+  assert.equal(p.event_action, 'accept')
+  assert.equal(p.src_ip, null) // no src on a session-close record
+  assert.equal(p.dst_ip, null)
+  assert.equal(p.bytes, 404)
+  // No header → source falls back to the gateway_id name (never empty).
+  assert.equal(p.source, 'gw7F9C8BA3')
+  assert.equal(p.host, 'gw7F9C8BA3')
+  assert.equal(p.cp_gateway_mac, '00:1c:7f:9c:8b:a3')
+})
+
+// detect(): SMB lines are claimed; aruba does NOT steal them.
+test('Check Point SMB detect() claims the SMB key="value" shape; aruba does not', () => {
+  const s1 =
+    '<85>Jun 25 15:24:41 037161661 Action="accept" src="192.168.252.95" ' +
+    'dst="149.154.167.91" rule_name="Outgoing Default Policy" ' +
+    'gateway_id="gw7F9C8BA3|Bezeq6|00:1C:7F:9C:8B:A3" ProductName="Application Control"'
+  const s3 =
+    'Action="accept" Uuid="{0x6a3d1e50,0x0,0x5fad5855,0xeae88559}" ' +
+    'gateway_id="gw7F9C8BA3|Bezeq6|00:1C:7F:9C:8B:A3" ProductName=""'
+  assert.equal(checkpoint.detect(s1), true)
+  assert.equal(checkpoint.detect(s3), true)
+  // ARUBA FIX: aruba.detect() must refuse a line carrying CP signatures.
+  assert.equal(aruba.detect(s1), false)
+  assert.equal(aruba.detect(s3), false)
+})
+
+// SMB detect() must NOT match a generic syslog line (no quoted Action + CP key).
+test('Check Point SMB detect() does NOT claim generic syslog', () => {
+  assert.equal(checkpoint.detect('sshd[123]: Accepted password for root from 10.0.0.1'), false)
+  // A quoted action alone (no CP-distinctive key) is not enough.
+  assert.equal(checkpoint.detect('Action="accept" foo="bar" baz="qux"'), false)
+})
+
+// ARUBA REGRESSION — a REAL ArubaOS authmgr 802.1X line must STILL parse as
+// aruba (the CP guard must not over-reach and break legitimate Aruba logs).
+test('Aruba authmgr 802.1X line still parses as aruba (no CP-guard regression)', () => {
+  const line =
+    '<189>authmgr[1234]: <522008> |auth|  Sta aa:bb:cc:dd:ee:ff: ' +
+    '802.1X auth success for user=alice'
+  assert.equal(checkpoint.detect(line), false) // CP must not claim it
+  assert.equal(aruba.detect(line), true)
+  const r = parsed(line)
+  assert.equal(r.family, 'aruba')
+  const p = r.parsed
+  assert.equal(p.device_vendor, 'aruba')
+  assert.equal(p.event_category, 'auth')
+  assert.equal(p.event_action, 'login')
+  assert.equal(p.event_subtype, 'success')
+  assert.equal(p.src_mac, 'aa:bb:cc:dd:ee:ff')
 })
 
 // Fix #2 — direct unit coverage of the shared normProto helper.

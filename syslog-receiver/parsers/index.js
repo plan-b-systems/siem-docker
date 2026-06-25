@@ -45,6 +45,11 @@ const { normVendor } = require('./util')
 // NOTE: FortiGate kv and the generic heuristic fallback are intentionally NOT
 // in this list — server.js runs them after this dispatch returns null, exactly
 // mirroring the cloud's layering.
+// checkpoint MUST precede aruba: Check Point SMB / Quantum Spark key="value"
+// lines (Action="..." rule_name="..." ProductName="..." gateway_id="...|MAC")
+// were being mis-claimed by aruba's heuristic markers. checkpoint.detect() now
+// claims them and runs first here, so CP always wins (aruba.detect() also has a
+// belt-and-braces CP guard).
 const PARSERS = [
   { name: 'cef', ...cef },
   { name: 'leef', ...leef },

@@ -21,6 +21,13 @@
 
 const ARUBA_MARKERS = /\b(?:authmgr|stm|wms|mobility|cli-hdlr|ArubaOS|AP-[A-Z0-9\-]+:|Instant|ClearPass|ArubaOSCX|aruba)\b/
 
+// Check Point SMB / Quantum Spark signatures. These key="value" lines were
+// being mis-claimed by the heuristic Aruba markers (a bare MAC / a vendor token
+// in gateway_id tripped the markers). Aruba MUST NOT claim a line carrying any
+// CP signature — checkpoint.js owns it (and runs BEFORE aruba in the dispatch).
+const CHECKPOINT_SIGNATURES =
+  /\bAction="|\brule_name="|\bProductName="|\bUuid="\{0x|\blayer_uuid="|\blayer_name="|\binzone="|\boutzone="/i
+
 // SYMBOL_FRAME matches Aruba structured events. Pipes can appear in two
 // arrangements:
 //   <ID> |level| module| text        (3 pipes — controller/wireless mgmt)
@@ -32,6 +39,11 @@ const SYMBOL_FRAME_3 = /<(\d+)>\s*\|([a-z]+)\|\s*([A-Za-z][\w .-]*?)\|\s*(.*)$/i
 const SYMBOL_FRAME_2 = /<(\d+)>\s*\|([a-z]+)\|\s*(.*)$/i
 
 function detect(msg) {
+  // Never claim a Check Point SMB / Quantum Spark line (key="value" with a
+  // quoted Action / rule_name / ProductName / Uuid="{0x...). checkpoint.js owns
+  // those and is dispatched before aruba; this guard keeps aruba from stealing
+  // them if it were ever called first or in isolation.
+  if (CHECKPOINT_SIGNATURES.test(msg)) return false
   return ARUBA_MARKERS.test(msg)
 }
 

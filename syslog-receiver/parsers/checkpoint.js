@@ -41,6 +41,22 @@
 //   * (Fix #6) Check Point Log-Exporter BRACKET/COLON format:
 //        [action:"Drop"; src:"1.2.3.4"; dst:"5.6.7.8"; ... ]
 //     — semicolon-separated key:"value"; pairs inside square brackets.
+//
+// SMB / QUANTUM SPARK "Log Exporter" (Fix: on-prem Check Point SMB appliances):
+//   Check Point Small/Medium-Business gateways (Quantum Spark / 1500-series /
+//   "SMB" appliances) emit a DIFFERENT native shape than the enterprise gateway:
+//   space-separated key="value" pairs (capitalised "Action", quoted values that
+//   may contain spaces), optionally prefixed by an RFC3164 syslog header
+//   (<PRI>Mon DD HH:MM:SS HOSTNAME). Real production sample (one line):
+//     <85>Jun 25 15:24:41 037161661 Action="accept" Uuid="{0x6a3d1165,...}"
+//       src="192.168.252.95" dst="149.154.167.91" proto="6" service_id="HTTPS"
+//       inzone="Internal" outzone="External" rule_name="Outgoing Default Policy"
+//       name="Telegram" category="Instant Messaging" gateway_id="gw...|...|MAC"
+//       ProductName="Application Control" svc="443" ProductFamily=""
+//   These were previously mis-claimed by aruba.js (the bare MAC / token tripped
+//   its heuristic markers) or fell through unparsed. They are CP-unique: a
+//   double-quoted Action plus CP-only fields (rule_name=/inzone=/ProductName=/
+//   Uuid="{0x ...). We detect + parse them here as device_product=quantum-spark.
 
 'use strict'
 
@@ -68,6 +84,59 @@ const FORTI_MARKERS = /\b(?:devname=|logid=|srcport=|dstport=|policyid=|devid=)/
 // Bracket/colon Log-Exporter pair: key:"value" (semicolon-separated, inside []).
 const BRACKET_KV_REGEX = /([\w.\-]+):"([^"]*)"/g
 
+// ── Check Point SMB / Quantum Spark "Log Exporter" key="value" format ──
+// Space-separated key="value" pairs; values are ALWAYS double-quoted and may
+// contain spaces ("Outgoing Default Policy") and special chars (the gateway_id
+// MAC, the Uuid "{0x...}" blob). A simple key="value" tokenizer captures them.
+const SMB_KV_REGEX = /(\w+)="([^"]*)"/g
+
+// RFC3164 header that may prefix the SMB line:  <PRI>Mon DD HH:MM:SS HOSTNAME
+// (HOSTNAME is the appliance id, e.g. "037161661"). The receiver may or may not
+// have stripped it already, so detection/parsing must tolerate BOTH.
+const RFC3164_PREFIX =
+  /^<\d{1,3}>(?:\d\s+)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+(\S+)\s+/
+
+// SMB-distinctive secondary fields: at least one of these alongside a quoted
+// Action makes a line unambiguously Check Point SMB (no other vendor in our
+// stack emits this exact key="value" vocabulary).
+const SMB_SECONDARY =
+  /\b(?:rule_name|rule_uid|layer_uuid|layer_name|inzone|outzone|ProductName|match_id|UP_match_table)="/
+
+// True iff the line is the SMB / Quantum Spark key="value" format: a quoted
+// Action plus EITHER a CP-distinctive secondary field OR a Uuid="{0x ..." blob.
+function isSmbFormat(msg) {
+  if (!/\bAction="/.test(msg)) return false
+  if (SMB_SECONDARY.test(msg)) return true
+  if (/\bUuid="\{0x/i.test(msg)) return true
+  return false
+}
+
+// Strip a leading RFC3164 <PRI>timestamp HOSTNAME header if present, returning
+// { hostname, body }. If there is no header, hostname is null and body is msg.
+function stripRfc3164(msg) {
+  const m = msg.match(RFC3164_PREFIX)
+  if (m) return { hostname: m[1], body: msg.slice(m[0].length) }
+  return { hostname: null, body: msg }
+}
+
+// Parse SMB key="value" pairs into the SAME lowercased kv shape kvParse()
+// produces (first NON-EMPTY value wins, so empty user=""/ProductName="" never
+// shadows a later populated key). Returns { kv, hostname }.
+function smbParse(msg) {
+  const { hostname, body } = stripRfc3164(msg)
+  const kv = {}
+  SMB_KV_REGEX.lastIndex = 0
+  let m
+  while ((m = SMB_KV_REGEX.exec(body)) !== null) {
+    const key = m[1].toLowerCase()
+    const val = m[2]
+    // First NON-EMPTY occurrence wins; treat "" as absent so a later populated
+    // duplicate (or a populated field after an empty one) is what we keep.
+    if (kv[key] === undefined || kv[key] === '') kv[key] = val
+  }
+  return { kv, hostname }
+}
+
 // True iff the line looks like the bracketed key:"value"; Log-Exporter format
 // AND carries an action plus a src/dst — distinctive enough to be CP-only.
 function isBracketFormat(msg) {
@@ -93,6 +162,14 @@ function bracketParse(msg) {
 function detect(msg) {
   // Cheap reject: must look like key=value OR key:"value" at all.
   if (!/[=:]/.test(msg)) return false
+
+  // Check Point SMB / Quantum Spark key="value": a double-quoted Action plus a
+  // CP-distinctive secondary field (rule_name=/inzone=/ProductName=/...) OR a
+  // Uuid="{0x ..." blob. Distinctive enough to be CP-only and MUST be checked
+  // before the generic markers so SMB lines (which carry no originsicname/loc/
+  // CheckPoint token) are still claimed. Does NOT match generic syslog: it
+  // requires the quoted Action AND a CP-only key.
+  if (isSmbFormat(msg)) return true
 
   // Strong, Check-Point-unique markers.
   if (/\boriginsicname=/i.test(msg)) return true
@@ -157,7 +234,99 @@ function toInt(v) {
   return Number.isFinite(n) ? n : null
 }
 
+// Treat empty-string vendor values ("") as absent so user=""/ProductName=""
+// never become bogus populated fields.
+function nz(v) {
+  if (v == null || v === '') return null
+  return v
+}
+
+// Parse the Check Point SMB / Quantum Spark key="value" format into the
+// normalized shape. Field names follow the SMB Log-Exporter vocabulary:
+//   src/dst, proto (numeric), svc (numeric dest port), service_id (named
+//   service), Action, rule_name, inzone/outzone, name (application),
+//   category (app classification), ProductName (CP blade), user, bytes,
+//   gateway_id (raw, with a trailing MAC), Uuid (session id).
+function parseSmb(msg) {
+  const { kv, hostname } = smbParse(msg)
+
+  // Must carry firewall-meaningful keys; else bail (lets dispatch quarantine).
+  const hasAny = nz(kv.action) || nz(kv.src) || nz(kv.dst) || nz(kv.productname) || nz(kv.uuid)
+  if (!hasAny) return null
+
+  // svc is the numeric destination port; service_id is the named service.
+  const svcRaw = nz(kv.svc)
+  const dstPort = svcRaw != null && /^\d+$/.test(svcRaw) ? toInt(svcRaw) : null
+
+  // Action lowercased → canonical event_action (accept/drop/reject/block).
+  const action = nz(kv.action) ? String(kv.action).toLowerCase() : null
+
+  // gateway_id keeps its raw form; extract the trailing MAC into a CP/device
+  // field (NOT src_mac — this is the GATEWAY's MAC, not a station's).
+  const gatewayId = nz(kv.gateway_id)
+  let gatewayMac = null
+  let gatewayName = null
+  if (gatewayId) {
+    const macM = gatewayId.match(/([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\s*$/)
+    if (macM) gatewayMac = macM[1].toLowerCase()
+    // Leading token before the first '|' is the gateway name (e.g. "gw7F9C8BA3").
+    gatewayName = gatewayId.split('|')[0] || null
+  }
+
+  // source/host: prefer the syslog-header HOSTNAME so the firewall shows up in
+  // the dashboard Sources list (which aggregates on 'source'). When the header
+  // was already stripped (sample 3), fall back to the gateway name, else a
+  // constant so the field is never empty.
+  const source = hostname || gatewayName || 'checkpoint'
+
+  // bytes: a generic bytes field plus directional bytes when present.
+  const bytesSent = toInt(nz(kv.client_outbound_bytes) || nz(kv.server_outbound_bytes))
+  const bytesReceived = toInt(nz(kv.client_inbound_bytes) || nz(kv.server_inbound_bytes))
+
+  return {
+    device_vendor: 'checkpoint',
+    device_product: 'quantum-spark',
+    source,
+    host: source,
+    application: nz(kv.name) || nz(kv.productname) || null,
+    message: msg.trim(),
+
+    event_action: action,
+    event_category: 'network',
+    event_subtype: nz(kv.category) || null,   // app classification ("Instant Messaging")
+
+    src_ip: nz(kv.src) || null,
+    dst_ip: nz(kv.dst) || null,
+    src_port: null,
+    dst_port: dstPort,
+    src_user: nz(kv.user) || nz(kv.src_user_name) || null,
+    network_protocol: normProto(nz(kv.proto)),
+    // Keep the app-layer protocol value too (e.g. "HTTPS"/"Unknown Protocol").
+    app_protocol: nz(kv.protocol) || null,
+    network_service: nz(kv.service_id) || null,
+
+    fw_rule_name: nz(kv.rule_name) || null,
+    fw_policy_id: nz(kv.rule_uid) || null,
+    bytes: toInt(nz(kv.bytes)),
+    bytes_sent: bytesSent,
+    bytes_received: bytesReceived,
+
+    // Check-Point-specific extras (kept for forensic/rule use).
+    cp_blade: nz(kv.productname) || null,
+    cp_inzone: nz(kv.inzone) || null,
+    cp_outzone: nz(kv.outzone) || null,
+    cp_gateway_id: gatewayId,
+    cp_gateway_mac: gatewayMac,
+    cp_uuid: nz(kv.uuid) || null,
+    cp_session_id: nz(kv.uuid) || null,
+  }
+}
+
 function parse(msg) {
+  // Check Point SMB / Quantum Spark key="value" format takes priority — it is
+  // detected by a quoted Action + a CP-distinctive key (see isSmbFormat).
+  if (isSmbFormat(msg)) return parseSmb(msg)
+
   // Bracket/colon Log-Exporter format vs flat key=value. Pick whichever yields
   // the CP fields. Bracket format is detected by its [ ... key:"value" ] shape.
   const kv = isBracketFormat(msg) ? bracketParse(msg) : kvParse(msg)

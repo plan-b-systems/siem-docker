@@ -106,6 +106,8 @@ const SMB_SECONDARY =
 // Action plus EITHER a CP-distinctive secondary field OR a Uuid="{0x ..." blob.
 function isSmbFormat(msg) {
   if (!/\bAction="/.test(msg)) return false
+  // Never claim a FortiGate line (parity with the bracket / marker-stripped paths).
+  if (FORTI_MARKERS.test(msg)) return false
   if (SMB_SECONDARY.test(msg)) return true
   if (/\bUuid="\{0x/i.test(msg)) return true
   return false

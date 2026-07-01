@@ -100,11 +100,46 @@ Write-Ok "Detected ${totalRAM} GB RAM -> OpenSearch heap: ${HEAP}"
 # We don't clobber a pre-existing hand-tuned .wslconfig.
 $wslMem = [math]::Max(4, $totalRAM - 4)
 $wslConfigPath = "$env:USERPROFILE\.wslconfig"
+# CRITICAL for reboot survival: WSL idle-shuts-down the distro (default
+# vmIdleTimeout=60000ms) ~60s after the last session closes -- it runs
+# 'systemctl poweroff' on the distro regardless of systemd/docker running
+# inside, so the SIEM cannot survive a reboot unattended. Disable both the VM
+# and instance idle timeouts (instanceIdleTimeout requires WSL 2.4.4+).
+$idleNote = @"
+# Keep the SIEM distro alive 24/7 (do NOT idle-shut-down). Required for reboot survival.
+"@
 if (-not (Test-Path $wslConfigPath)) {
-    Set-Content -Path $wslConfigPath -Value "[wsl2]`nmemory=${wslMem}GB`n" -Encoding ascii
-    Write-Ok "WSL2 memory limit set to ${wslMem} GB (.wslconfig)"
+    Set-Content -Path $wslConfigPath -Encoding ascii -Value @"
+[wsl2]
+memory=${wslMem}GB
+$idleNote
+vmIdleTimeout=-1
+
+[general]
+instanceIdleTimeout=-1
+"@
+    Write-Ok "WSL2 .wslconfig created (memory ${wslMem}GB + idle-shutdown disabled)"
 } else {
-    Write-Warn "Existing .wslconfig left as-is — ensure [wsl2] memory >= ${wslMem}GB for best performance"
+    $raw = Get-Content $wslConfigPath -Raw
+    $changed = $false
+    if ($raw -notmatch '(?im)^\s*vmIdleTimeout') {
+        if ($raw -match '(?im)^\s*\[wsl2\]\s*$') {
+            $raw = $raw -replace '(?im)^(\s*\[wsl2\]\s*)$', "`$1`r`nvmIdleTimeout=-1"
+        } else { $raw = "[wsl2]`r`nvmIdleTimeout=-1`r`n`r`n" + $raw }
+        $changed = $true
+    }
+    if ($raw -notmatch '(?im)^\s*instanceIdleTimeout') {
+        if ($raw -match '(?im)^\s*\[general\]\s*$') {
+            $raw = $raw -replace '(?im)^(\s*\[general\]\s*)$', "`$1`r`ninstanceIdleTimeout=-1"
+        } else { $raw = $raw.TrimEnd() + "`r`n`r`n[general]`r`ninstanceIdleTimeout=-1`r`n" }
+        $changed = $true
+    }
+    if ($changed) {
+        Set-Content -Path $wslConfigPath -Value $raw -Encoding ascii
+        Write-Ok "Existing .wslconfig updated: idle-shutdown disabled (reboot survival). Verify [wsl2] memory >= ${wslMem}GB"
+    } else {
+        Write-Warn "Existing .wslconfig already disables idle-shutdown; left as-is. Ensure [wsl2] memory >= ${wslMem}GB"
+    }
 }
 
 $DATA_PATH_RAW = Read-Host -Prompt "  External data path, e.g. D:\SIEMData [leave empty for Docker volumes]"
@@ -474,6 +509,14 @@ if (Test-Path "$psSource\PlanB-SIEM-Startup.ps1") {
     if (Test-Path "$installDir\PlanB-SIEM-UDP-Relay.ps1") { Copy-Item "$installDir\PlanB-SIEM-UDP-Relay.ps1" "$installDir\udp-relay.ps1" -Force }
 }
 
+# Boot tasks MUST run as the interactive user, NOT SYSTEM. The PlanB-SIEM WSL
+# distro is per-user; SYSTEM cannot see it, so SYSTEM-run tasks fail to start the
+# distro after a reboot (this was the original 43h-outage cause). Prompt once for
+# the account password so the tasks use Password logon (run whether or not the
+# user is logged in).
+$taskUserName = "$env:USERDOMAIN\$env:USERNAME"
+$taskCred = Get-Credential -UserName $taskUserName -Message "Password for $taskUserName - the SIEM auto-start tasks run as this user so they can see the per-user WSL distro"
+
 # Register the task
 $action = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
@@ -495,7 +538,7 @@ Register-ScheduledTask `
     -Action $action `
     -Trigger @($triggerStartup, $triggerLogon) `
     -RunLevel Highest `
-    -User "SYSTEM" `
+    -User $taskCred.UserName -Password $taskCred.GetNetworkCredential().Password `
     -Settings $settings `
     -Force | Out-Null
 
@@ -520,7 +563,7 @@ if (Test-Path $relayPath) {
         -Action $relayAction `
         -Trigger (New-ScheduledTaskTrigger -AtStartup) `
         -RunLevel Highest `
-        -User "SYSTEM" `
+        -User $taskCred.UserName -Password $taskCred.GetNetworkCredential().Password `
         -Settings $relaySettings `
         -Force | Out-Null
     Start-ScheduledTask -TaskName "PlanB-SIEM-UDP-Relay"

@@ -40,11 +40,36 @@ $wslMem = [math]::Max(4, $totalRAM - 4)
 $wslConfigPath = "$env:USERPROFILE\.wslconfig"
 $wslConfigChanged = $false
 if (-not (Test-Path $wslConfigPath)) {
-    Set-Content -Path $wslConfigPath -Value "[wsl2]`nmemory=${wslMem}GB`n" -Encoding ascii
-    Write-Host "  [OK] WSL2 memory limit set to ${wslMem} GB (.wslconfig created)" -ForegroundColor Green
+    Set-Content -Path $wslConfigPath -Encoding ascii -Value @"
+[wsl2]
+memory=${wslMem}GB
+# Keep the SIEM distro alive 24/7 (do NOT idle-shut-down). Required for reboot survival.
+vmIdleTimeout=-1
+
+[general]
+instanceIdleTimeout=-1
+"@
+    Write-Host "  [OK] WSL2 .wslconfig created (memory ${wslMem}GB + idle-shutdown disabled)" -ForegroundColor Green
     $wslConfigChanged = $true
 } else {
-    Write-Host "  [..] Existing .wslconfig left as-is (ensure [wsl2] memory >= ${wslMem}GB)" -ForegroundColor Yellow
+    # Ensure idle-shutdown is disabled (reboot survival) without clobbering the rest.
+    $raw = Get-Content $wslConfigPath -Raw
+    if ($raw -notmatch '(?im)^\s*vmIdleTimeout') {
+        if ($raw -match '(?im)^\s*\[wsl2\]\s*$') { $raw = $raw -replace '(?im)^(\s*\[wsl2\]\s*)$', "`$1`r`nvmIdleTimeout=-1" }
+        else { $raw = "[wsl2]`r`nvmIdleTimeout=-1`r`n`r`n" + $raw }
+        $wslConfigChanged = $true
+    }
+    if ($raw -notmatch '(?im)^\s*instanceIdleTimeout') {
+        if ($raw -match '(?im)^\s*\[general\]\s*$') { $raw = $raw -replace '(?im)^(\s*\[general\]\s*)$', "`$1`r`ninstanceIdleTimeout=-1" }
+        else { $raw = $raw.TrimEnd() + "`r`n`r`n[general]`r`ninstanceIdleTimeout=-1`r`n" }
+        $wslConfigChanged = $true
+    }
+    if ($wslConfigChanged) {
+        Set-Content -Path $wslConfigPath -Value $raw -Encoding ascii
+        Write-Host "  [OK] .wslconfig updated: idle-shutdown disabled (reboot survival)" -ForegroundColor Green
+    } else {
+        Write-Host "  [..] Existing .wslconfig already OK (ensure [wsl2] memory >= ${wslMem}GB)" -ForegroundColor Yellow
+    }
 }
 
 # In-distro update: pull latest repo (config.env + override preserved), pull images, up -d

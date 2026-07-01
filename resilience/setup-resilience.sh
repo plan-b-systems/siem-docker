@@ -62,15 +62,17 @@ if [[ -f /etc/wsl.conf ]]; then
     info "Backed up /etc/wsl.conf"
 fi
 
+# systemd=true ONLY. A [boot] command= that starts dockerd conflicts with
+# systemd's docker.service, and WSL only holds the distro open with systemd as
+# PID 1 anyway. Docker + stack convergence are handled by systemd units below.
 cat > /etc/wsl.conf <<EOF
 [boot]
 systemd=true
-command=${SIEM_DIR}/resilience/wsl-startup.sh
 
 [network]
 generateResolvConf=false
 EOF
-info "Written /etc/wsl.conf (systemd=true + boot command)"
+info "Written /etc/wsl.conf (systemd=true; docker + stack managed by systemd units)"
 
 # ════════════════════════════════════════════════════════════
 # 3. Make scripts executable
@@ -83,51 +85,59 @@ chmod +x "${SIEM_DIR}/resilience/health-check.sh"
 info "Scripts marked executable"
 
 # ════════════════════════════════════════════════════════════
-# 4. Install systemd service (belt-and-suspenders with boot command)
+# 4. Docker under systemd + non-blocking stack convergence
 # ════════════════════════════════════════════════════════════
-step "Installing systemd service"
+step "Configuring systemd services"
 
-# Disable old service if present
-if systemctl is-enabled plan-b-siem.service &>/dev/null; then
+# Remove the old boot-blocking service if present: its compose-up gated on
+# OpenSearch health, which delayed systemd past WSL's ~10s boot wait -> WSL
+# declared /sbin/init failed and reaped the distro. See REBOOT-SURVIVAL.md.
+if [[ -f /etc/systemd/system/plan-b-siem.service ]]; then
     systemctl disable plan-b-siem.service 2>/dev/null || true
-    info "Disabled old plan-b-siem.service"
+    rm -f /etc/systemd/system/plan-b-siem.service
+    info "Removed old boot-blocking plan-b-siem.service"
 fi
 
-cat > /etc/systemd/system/plan-b-siem.service <<EOF
+# Docker + containerd as managed services (Restart=always) — fast to start, so
+# systemd reaches its target well within WSL's boot window.
+systemctl enable docker.service containerd.service docker.socket 2>/dev/null || \
+    warn "Could not enable docker/containerd units (verify docker-ce is installed)"
+
+# Stack convergence runs ~15s AFTER boot via a timer, OFF the boot-critical path,
+# so a slow (health-gated) compose up never delays systemd reaching 'running'.
+# boot-converge.sh self-heals corrupt RW layers left by unclean shutdowns.
+cat > /etc/systemd/system/plan-b-siem-stack.service <<EOF
 [Unit]
-Description=Plan-B Systems SIEM Stack
-After=docker.service network-online.target
-Wants=network-online.target
+Description=Plan-B Systems SIEM stack convergence (self-heals corrupt RW layers)
+After=docker.service
 Requires=docker.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${SIEM_DIR}
-ExecStartPre=${SIEM_DIR}/resilience/clean-stale-processes.sh
-ExecStart=/usr/bin/docker compose --env-file ${SIEM_DIR}/config.env -f ${SIEM_DIR}/docker-compose.yml up -d
-ExecStop=/usr/bin/docker compose --env-file ${SIEM_DIR}/config.env -f ${SIEM_DIR}/docker-compose.yml down
+ExecStart=/bin/bash ${SIEM_DIR}/resilience/boot-converge.sh
+ExecStop=/bin/bash ${SIEM_DIR}/resilience/boot-converge.sh stop
 TimeoutStartSec=300
-
-[Install]
-WantedBy=multi-user.target
 EOF
 
+cat > /etc/systemd/system/plan-b-siem-stack.timer <<EOF
+[Unit]
+Description=Bring up Plan-B SIEM stack ~15s after boot (off the boot-critical path)
+
+[Timer]
+OnBootSec=15
+AccuracySec=2s
+Unit=plan-b-siem-stack.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+chmod +x "${SIEM_DIR}/resilience/boot-converge.sh" 2>/dev/null || true
 systemctl daemon-reload
-systemctl enable plan-b-siem.service
-info "systemd service installed and enabled"
-
-# ════════════════════════════════════════════════════════════
-# 5. Enable Docker service for systemd auto-start
-# ════════════════════════════════════════════════════════════
-step "Enabling Docker auto-start"
-
-if systemctl list-unit-files docker.service &>/dev/null; then
-    systemctl enable docker.service 2>/dev/null || true
-    info "Docker service enabled for systemd"
-else
-    warn "Docker systemd unit not found — Docker will be started by wsl-startup.sh directly"
-fi
+systemctl enable plan-b-siem-stack.timer 2>/dev/null || true
+info "Enabled docker + containerd + non-blocking boot-convergence timer"
 
 # ════════════════════════════════════════════════════════════
 # 6. Copy Windows scripts

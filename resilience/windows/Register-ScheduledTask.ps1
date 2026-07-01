@@ -1,12 +1,12 @@
 # ============================================================
-# Plan-B Systems SIEM – Register Windows Scheduled Task
+# Plan-B Systems SIEM - Register Windows Scheduled Task
 # Run this once as Administrator after installation
 # ============================================================
 
 $ErrorActionPreference = "Stop"
 
 Write-Host ""
-Write-Host "Plan-B Systems SIEM – Scheduled Task Registration" -ForegroundColor Cyan
+Write-Host "Plan-B Systems SIEM - Scheduled Task Registration" -ForegroundColor Cyan
 Write-Host ""
 
 # Check admin privileges
@@ -33,6 +33,13 @@ if (Test-Path $scriptSource) {
     exit 1
 }
 
+# The task MUST run as the interactive user, NOT SYSTEM: the PlanB-SIEM WSL distro
+# is per-user and SYSTEM cannot see it, so a SYSTEM-run task fails to start the
+# distro after a reboot (original 43h-outage cause). Prompt once for the password
+# so the task uses Password logon (runs whether or not the user is logged in).
+$taskUserName = "$env:USERDOMAIN\$env:USERNAME"
+$taskCred = Get-Credential -UserName $taskUserName -Message "Password for $taskUserName - the SIEM auto-start task runs as this user so it can see the per-user WSL distro"
+
 # Register the scheduled task
 $action = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
@@ -54,7 +61,7 @@ Register-ScheduledTask `
     -Action $action `
     -Trigger @($triggerStartup, $triggerLogon) `
     -RunLevel Highest `
-    -User "SYSTEM" `
+    -User $taskCred.UserName -Password $taskCred.GetNetworkCredential().Password `
     -Settings $settings `
     -Force | Out-Null
 

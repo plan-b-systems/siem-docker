@@ -1,19 +1,13 @@
 # ── Active config (contains generated secrets) ──────────────
 config.env
 
-# ── Generated Graylog config (contains secrets) ─────────────
-graylog/graylog.conf
 
 # ── TLS certificates & keys (all generated per-install) ─────
 certs/ca.key
 certs/ca.crt
-certs/graylog.key
-certs/graylog.crt
-certs/graylog.csr
 certs/ca.srl
 
 # ── JVM truststore (binary, regenerated on install) ─────────
-graylog/cacerts
 
 # ── Docker build cache ───────────────────────────────────────
 license-checker/__pycache__/

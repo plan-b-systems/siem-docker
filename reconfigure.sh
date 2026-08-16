@@ -40,71 +40,30 @@ step "Loading configuration"
 set -a; source config.env; set +a
 info "config.env loaded"
 
-REQUIRED_VARS=(CLIENT_NAME CLIENT_ID GRAYLOG_HOSTNAME GRAYLOG_ADMIN_PASSWORD
-               TIMEZONE GRAYLOG_PASSWORD_SECRET GRAYLOG_ROOT_PASSWORD_SHA2)
+REQUIRED_VARS=(CLIENT_NAME CLIENT_ID TIMEZONE JWT_SECRET DASHBOARD_PASSWORD_HASH)
 for var in "${REQUIRED_VARS[@]}"; do
     [[ -z "${!var:-}" ]] && die "config.env: ${var} is empty. Run install.sh first."
 done
 
-# ════════════════════════════════════════════════════════════
-# 2. Regenerate SHA2 if admin password was changed
-# ════════════════════════════════════════════════════════════
-step "Checking admin password hash"
-
-NEW_SHA2=$(echo -n "${GRAYLOG_ADMIN_PASSWORD}" | sha256sum | awk '{print $1}')
-if [[ "$NEW_SHA2" != "${GRAYLOG_ROOT_PASSWORD_SHA2}" ]]; then
-    info "Admin password changed – updating SHA2 hash"
-    sed -i "s|^GRAYLOG_ROOT_PASSWORD_SHA2=.*|GRAYLOG_ROOT_PASSWORD_SHA2=${NEW_SHA2}|" config.env
-    GRAYLOG_ROOT_PASSWORD_SHA2="$NEW_SHA2"
-else
-    info "Admin password unchanged"
+# NOTE: editing DASHBOARD_PASSWORD in config.env does NOT change the admin
+# password. Since decision 15 (multi-user auth) the SQLite users.db is the
+# source of truth; DASHBOARD_PASSWORD_HASH only seeds the admin on first boot.
+# To reset the admin password use:  ./scripts/reset-admin.sh <new-password>
+if [[ -n "${DASHBOARD_PASSWORD:-}" ]]; then
+    warn "DASHBOARD_PASSWORD in config.env is only used to seed the first admin."
+    warn "To change an existing admin password: ./scripts/reset-admin.sh <new-password>"
 fi
 
 # ════════════════════════════════════════════════════════════
-# 3. Regenerate TLS cert if hostname changed
-# ════════════════════════════════════════════════════════════
-step "Checking TLS certificate"
-
-CERT_CN=""
-if [[ -f certs/graylog.crt ]]; then
-    CERT_CN=$(openssl x509 -in certs/graylog.crt -noout -subject 2>/dev/null \
-              | sed -n 's/.*CN\s*=\s*\([^,/]*\).*/\1/p')
-fi
-
-if [[ "$CERT_CN" != "$GRAYLOG_HOSTNAME" ]]; then
-    warn "Hostname changed (cert CN='${CERT_CN}', config='${GRAYLOG_HOSTNAME}')"
-    info "Regenerating TLS certificate …"
-    rm -f certs/graylog.{crt,key,csr}
-    chmod +x certs/generate-certs.sh
-    bash certs/generate-certs.sh config.env
-    chmod 644 certs/graylog.key
-    CERT_CHANGED=true
-else
-    info "TLS certificate hostname matches – no regeneration needed"
-    CERT_CHANGED=false
-fi
-
-# ════════════════════════════════════════════════════════════
-# 4. Re-render Graylog config
-# ════════════════════════════════════════════════════════════
-step "Rendering Graylog configuration"
-
-envsubst < graylog/graylog.conf.template > graylog/graylog.conf
-chmod 640 graylog/graylog.conf
-info "graylog/graylog.conf updated"
-
-# ════════════════════════════════════════════════════════════
-# 5. Determine which services need restart
+# 2. Determine which services need restart
 # ════════════════════════════════════════════════════════════
 step "Applying changes"
 
-# Always restart Graylog – config or env changes affect it
-RESTART_GRAYLOG=true
+# Dashboard and syslog-receiver read config.env at startup, so they always
+# restart. OpenSearch only restarts when its heap changed — a restart there
+# interrupts indexing.
 RESTART_OPENSEARCH=false
-RESTART_LICENSE=true
 
-# OpenSearch heap change requires restart
-# We compare running env vs config (best effort)
 RUNNING_HEAP=$(docker inspect plan-b-opensearch \
     --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
     | grep OPENSEARCH_JAVA_OPTS | grep -oP '\-Xmx\K[^ ]+' || echo "")
@@ -120,22 +79,6 @@ fi
 info "Stopping license-checker …"
 docker compose --env-file config.env stop license-checker 2>/dev/null || true
 
-if [[ "$RESTART_GRAYLOG" == "true" ]]; then
-    info "Restarting Graylog …"
-    docker compose --env-file config.env up -d --force-recreate graylog
-
-    info "Waiting for Graylog to become healthy …"
-    TIMEOUT=300; ELAPSED=0
-    until curl -sk "https://localhost:${GRAYLOG_WEB_PORT:-9000}/api/" \
-          -o /dev/null -w "%{http_code}" 2>/dev/null | grep -q "200\|401"; do
-        sleep 10; ELAPSED=$((ELAPSED+10))
-        [[ $ELAPSED -ge $TIMEOUT ]] && die "Graylog failed to restart within ${TIMEOUT}s"
-        echo -n "."
-    done
-    echo ""
-    info "Graylog healthy"
-fi
-
 if [[ "$RESTART_OPENSEARCH" == "true" ]]; then
     warn "Restarting OpenSearch – indexing will be interrupted briefly"
     docker compose --env-file config.env up -d --force-recreate opensearch
@@ -150,6 +93,23 @@ if [[ "$RESTART_OPENSEARCH" == "true" ]]; then
     echo ""
     info "OpenSearch healthy"
 fi
+
+info "Restarting syslog-receiver …"
+docker compose --env-file config.env up -d --force-recreate syslog-receiver
+
+info "Restarting dashboard …"
+docker compose --env-file config.env up -d --force-recreate dashboard
+
+info "Waiting for dashboard to become healthy …"
+TIMEOUT=120; ELAPSED=0
+until docker compose --env-file config.env exec -T dashboard \
+      node -e "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" &>/dev/null; do
+    sleep 5; ELAPSED=$((ELAPSED+5))
+    [[ $ELAPSED -ge $TIMEOUT ]] && die "Dashboard failed to restart within ${TIMEOUT}s"
+    echo -n "."
+done
+echo ""
+info "Dashboard healthy"
 
 # Restart license-checker
 info "Restarting license-checker …"

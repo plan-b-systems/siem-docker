@@ -3,7 +3,7 @@
 Plan-B Systems – License Checker Service
 =========================================
 State machine that validates the client license daily (12:00 local time)
-and controls Graylog / OpenSearch availability accordingly.
+and controls OpenSearch availability accordingly.
 
 Auth model (v2 — 2026-04-23, ed25519/X25519, zero plaintext secrets)
 --------------------------------------------------------------------

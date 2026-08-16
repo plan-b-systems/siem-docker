@@ -2,7 +2,7 @@
 
 On-premises SIEM appliance with a branded dashboard, syslog ingestion, OpenSearch storage, automated license management, and optional AI-powered log analysis.
 
-v1/Graylog is retired. The supported deployment path is the v2.1 stack from the `main` branch.
+v1 has been deleted. This is the only version of the stack, and it deploys from `main`.
 
 ## Architecture
 

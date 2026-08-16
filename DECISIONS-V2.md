@@ -47,22 +47,27 @@
 
 ---
 
-## 3. Branch Strategy — v2.1 on Main
+## 3. Branch Strategy — main only
 
-**Current status as of 2026-05-06:** v1 is retired. v2.1 is the supported on-prem stack and is deployed from the `main` branch.
+**Current status as of 2026-08-12:** v1 is deleted, not merely retired. The
+latest v2 release is the only version that exists, and `main` is the only
+branch. There is no v1 to support, no version selection, and no parallel
+release line.
 
-**Original decision, superseded:** `v2` branch in siem-docker repo. `main` stays as v1.
+**Current rules:**
+- `main` is the single source of truth. Feature and fix work happens on
+  short-lived branches that merge back into `main` and are then deleted.
+- Public one-line installers fetch from `main`. Deployment scripts default
+  `SIEM_BRANCH` to `main` and must not fetch, checkout, pull, or clone any
+  other branch.
+- Documentation describes the current stack only. It does not present v1 as
+  an installation target or a supported fallback.
 
-**Why:**
-- Existing v1 clients (like PlaySmart) must not be affected
-- Both versions must be deployable at any time via one-liner:
-  - v1: `irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install.ps1 | iex`
-  - v2: `irm https://raw.githubusercontent.com/plan-b-systems/siem-docker/main/install.ps1 | iex`
-- When v2 is stable and tested, it merges to `main` and v1 gets tagged as `v1`
-
-**Current rule:** public one-line installers use `main`. Deployment scripts must not fetch, checkout, pull, or clone the retired `v2` branch.
-
-**Original rule, superseded:** No changes to `main` branch until Mike specifically approves. v2 development happens exclusively on the `v2` branch.
+**Superseded history (for context, do not act on):** the original plan kept
+`main` as v1 while v2 developed on a `v2` branch, so that existing v1 clients
+(PlaySmart among them) stayed on a deployable version and both lines could be
+installed by one-liner at any time. v2.1 replaced v1 on `main` on 2026-05-06,
+and v1 was deleted outright on 2026-08-12, which ends that arrangement.
 
 ---
 
@@ -311,6 +316,7 @@ On-Prem                                    Cloud (siemsys)
 | 14 | API key rotation process | 2026-04-07 | Approved |
 | 15 | Multi-user auth, tier 2 (SQLite + TOTP MFA + lockout + audit + self-service reset) | 2026-04-22 | Approved |
 | 16 | SentinelOne (EDR) ingestion — built-in, portal-delivered credentials | 2026-06-21 | Approved |
+| 17 | v1 deleted; latest v2 on `main` is the only version and only branch | 2026-08-12 | Supersedes decision 3 |
 
 ---
 

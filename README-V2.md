@@ -2,7 +2,7 @@
 
 On-premises SIEM with branded dashboard, AI-powered log analysis, and automated license management. No Graylog — fully custom stack.
 
-v1/Graylog is retired. The supported deployment path is v2.1 from the `main` branch.
+v1 has been deleted. This is the only version of the stack, and it deploys from `main`.
 
 ---
 
@@ -286,9 +286,9 @@ docker compose --env-file config.env up -d
 
 ## Version Status
 
-v2.1 is the supported on-prem SIEM stack and is deployed from `main`.
-
-The retired v1 Graylog/MongoDB stack is no longer documented as an installation target.
+This is the only version of the on-prem SIEM stack, deployed from `main`, which is
+the only branch. v1 (Graylog/MongoDB) was deleted — it is not a supported fallback
+and is not documented as an installation target.
 
 ---
 

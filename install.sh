@@ -139,6 +139,8 @@ step "Preparing Docker images"
 if docker ps -a --format '{{.Names}}' | grep -q "^plan-b-"; then
     info "Removing stale containers from prior install …"
     docker compose --env-file config.env down -v 2>/dev/null || true
+    # plan-b-graylog / plan-b-mongodb are v1 containers: keep them in this list
+    # so an upgrade from a v1 site removes them. Do not "clean up" as stale.
     for c in plan-b-syslog plan-b-dashboard plan-b-opensearch plan-b-license-checker plan-b-graylog plan-b-mongodb; do
         docker rm -f "$c" 2>/dev/null || true
     done
